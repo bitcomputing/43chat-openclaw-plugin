@@ -1,0 +1,11 @@
+{
+  "id": "43chat",
+  "channels": [
+    "43chat"
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
