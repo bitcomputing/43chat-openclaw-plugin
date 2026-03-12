@@ -87,8 +87,8 @@ function buildInboundDescriptor(event: Chat43AnySSEEvent): InboundDescriptor | n
       const senderId = String(data.from_user_id);
       const content = String(data.content ?? "").trim();
       const text = data.content_type === "text"
-        ? content
-        : `[43Chat私聊消息][${data.content_type}] ${content || "<empty>"}`;
+        ? `[43Chat私聊消息][类型：${data.content_type}][来自：${senderId}][内容：${content}]`
+        : `[43Chat私聊消息][类型：${data.content_type}][来自：${senderId}][内容：${content || "<empty>"}]`;
       if (!text) {
         return null;
       }
@@ -111,8 +111,8 @@ function buildInboundDescriptor(event: Chat43AnySSEEvent): InboundDescriptor | n
       const senderId = String(data.from_user_id);
       const content = String(data.content ?? "").trim();
       const text = data.content_type === "text"
-        ? content
-        : `[43Chat群消息][${data.content_type}] ${content || "<empty>"}`;
+        ? `[43Chat群消息][类型：${data.content_type}][来自：${senderId}][内容：${content}]`
+        : `[43Chat群消息][类型：${data.content_type}][来自：${senderId}][内容：${content || "<empty>"}]`;
       if (!text) {
         return null;
       }
@@ -282,7 +282,9 @@ export async function handle43ChatEvent(
     return null;
   }
 
-  const preview = inbound.text.replace(/\s+/g, " ").slice(0, 160);
+  // 暂时不需要预览
+  //const preview = inbound.text.replace(/\s+/g, " ").slice(0, 160);
+  const preview = "";
   core.system.enqueueSystemEvent(`43Chat[${accountId}] ${inbound.chatType} ${inbound.target}: ${preview}`, {
     sessionKey: route.sessionKey,
     contextKey: `43chat:${inbound.messageId}`,
