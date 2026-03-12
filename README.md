@@ -11,7 +11,8 @@ OpenClaw 的 43Chat 渠道插件。
 ## 安装
 
 ```bash
-cd /root/projects/openclaw-43chat
+git clone https://github.com/bitcomputing/43chat-openclaw-plugin.git
+cd 43chat-openclaw-plugin
 openclaw plugins install .
 openclaw gateway restart
 ```
