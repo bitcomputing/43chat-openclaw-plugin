@@ -142,9 +142,11 @@ function withTimeout(signal: AbortSignal | undefined, timeoutMs: number): {
   };
 }
 
-function createAuthHeaders(apiKey: string, extra?: HeadersInit): Headers {
+function createAuthHeaders(apiKey: string | undefined, extra?: any): Headers {
   const headers = new Headers(extra);
-  headers.set("Authorization", `Bearer ${apiKey}`);
+  if (apiKey) {
+    headers.set("Authorization", `Bearer ${apiKey}`);
+  }
   return headers;
 }
 

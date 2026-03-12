@@ -1,6 +1,6 @@
 {
   "name": "@wecode-ai-openclaw/43chat",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "OpenClaw 43Chat channel plugin",
   "scripts": {
