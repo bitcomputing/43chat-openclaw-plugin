@@ -1,0 +1,48 @@
+{
+  "name": "@wecode-ai-openclaw/43chat",
+  "version": "0.1.1",
+  "type": "module",
+  "description": "OpenClaw 43Chat channel plugin",
+  "scripts": {
+    "test:unit": "vitest run",
+    "ci:check": "npx tsc --noEmit && npm run test:unit",
+    "build": "tsc"
+  },
+  "license": "MIT",
+  "files": [
+    "index.ts",
+    "src/**/*.ts",
+    "!src/**/__tests__/**",
+    "!src/**/*.test.ts",
+    "REQUIREMENTS.md",
+    "README.md",
+    "openclaw.plugin.json"
+  ],
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "43chat",
+      "label": "43Chat",
+      "selectionLabel": "43Chat",
+      "docsPath": "/channels/43chat",
+      "docsLabel": "43chat",
+      "blurb": "43Chat OpenAPI + SSE channel.",
+      "order": 85
+    }
+  },
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.10",
+    "@vitest/coverage-v8": "^2.1.8",
+    "openclaw": "^2026.3.1",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.8"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.1"
+  }
+}
