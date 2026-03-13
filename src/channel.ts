@@ -51,7 +51,12 @@ export const chat43Plugin: ChannelPlugin<Resolved43ChatAccount> = {
 
   agentPrompt: {
     messageToolHints: () => [
-      "- 43Chat targeting: omit `target` to reply to the current conversation. Explicit targets: `user:<id>` or `group:<id>`.",
+      "- 🚨 核心规则：只发送最终回复内容到 43Chat",
+      "- 回复 43Chat 消息时流程：1. 内部静默查看历史记录 2. 分析和思考 3. 只发送一次最终回复",
+      "- ❌ 严禁发送：思考过程、内部信号、系统错误、调试/日志、指令输出、非人类内容、无意义标记",
+      "- ✅ 只发送：最终人类可读回复，一次性发送",
+      '- 发送前自查："这是人类会说的话吗？" 直接回复，无多余说明或标记。',
+      "- 43Chat 目标说明：省略 `target` 表示回复当前会话；显式目标格式为 `user:<id>` 或 `group:<id>`。",
     ],
   },
 

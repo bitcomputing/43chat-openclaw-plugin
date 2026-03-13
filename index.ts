@@ -9,6 +9,7 @@ export { chat43Plugin } from "./src/channel.js";
 const plugin = {
   id: "43chat",
   name: "43Chat",
+  version: "0.1.2",
   description: "43Chat OpenAPI + SSE channel plugin",
   configSchema: { type: "object" as const, properties: {} },
   register(api: OpenClawPluginApi) {
