@@ -86,9 +86,27 @@ function buildInboundDescriptor(event: Chat43AnySSEEvent): InboundDescriptor | n
       const data = event.data as Chat43PrivateMessageEventData;
       const senderId = String(data.from_user_id);
       const content = String(data.content ?? "").trim();
-      const text = data.content_type === "text"
-        ? `[43Chat私聊消息][类型：${data.content_type}][来自：${senderId}][内容：${content}]`
-        : `[43Chat私聊消息][类型：${data.content_type}][来自：${senderId}][内容：${content || "<empty>"}]`;
+      let text: string;
+      switch (data.content_type) {
+        case "text":
+          text = `[43Chat私聊消息][类型：文本][来自：${senderId}][内容：${content}]`;
+          break;
+        case "image":
+          text = `[43Chat私聊消息][类型：图片][来自：${senderId}][图片对象：${content || "<empty>"}]`;
+          break;
+        case "file":
+          text = `[43Chat私聊消息][类型：文件][来自：${senderId}][文件对象：${content || "<empty>"}]`;
+          break;
+        case "sharegroup":
+          text = `[43Chat私聊消息][类型：群组卡片][来自：${senderId}][卡片对象：${content || "<empty>"}]`;
+          break;
+        case "shareuser":
+          text = `[43Chat私聊消息][类型：用户卡片][来自：${senderId}][卡片对象：${content || "<empty>"}]`;
+          break;
+        default:
+          text = `[43Chat私聊消息][类型：${data.content_type}][来自：${senderId}][内容：${content || "<empty>"}]`;
+          break;
+      }
       if (!text) {
         return null;
       }
@@ -110,9 +128,27 @@ function buildInboundDescriptor(event: Chat43AnySSEEvent): InboundDescriptor | n
       const groupId = String(data.group_id);
       const senderId = String(data.from_user_id);
       const content = String(data.content ?? "").trim();
-      const text = data.content_type === "text"
-        ? `[43Chat群消息][类型：${data.content_type}][来自：${senderId}][内容：${content}]`
-        : `[43Chat群消息][类型：${data.content_type}][来自：${senderId}][内容：${content || "<empty>"}]`;
+      let text: string;
+      switch (data.content_type) {
+        case "text":
+          text = `[43Chat群消息][类型：文本][来自：${senderId}][内容：${content}]`;
+          break;
+        case "image":
+          text = `[43Chat群消息][类型：图片][来自：${senderId}][图片对象：${content || "<empty>"}]`;
+          break;
+        case "file":
+          text = `[43Chat群消息][类型：文件][来自：${senderId}][文件对象：${content || "<empty>"}]`;
+          break;
+        case "sharegroup":
+          text = `[43Chat群消息][类型：群组卡片][来自：${senderId}][卡片对象：${content || "<empty>"}]`;
+          break;
+        case "shareuser":
+          text = `[43Chat群消息][类型：用户卡片][来自：${senderId}][卡片对象：${content || "<empty>"}]`;
+          break;
+        default:
+          text = `[43Chat群消息][类型：${data.content_type}][来自：${senderId}][内容：${content || "<empty>"}]`;
+          break;
+      }
       if (!text) {
         return null;
       }
@@ -248,8 +284,9 @@ export async function handle43ChatEvent(
   params: Handle43ChatEventParams,
 ): Promise<Chat43MessageContext | null> {
   const { cfg, event, accountId, runtime } = params;
-  const log = runtime?.log ?? console.log;
-  const error = runtime?.error ?? console.error;
+  const consoleRef = (globalThis as any)?.console;
+  const log = runtime?.log ?? consoleRef?.log?.bind(consoleRef) ?? (() => {});
+  const error = runtime?.error ?? consoleRef?.error?.bind(consoleRef) ?? (() => {});
 
   const account = resolve43ChatAccount({ cfg, accountId });
   if (!account.enabled || !account.configured) {
@@ -352,7 +389,7 @@ export async function handle43ChatEvent(
   };
 
   const { dispatcher, replyOptions, markDispatchIdle } = core.channel.reply.createReplyDispatcherWithTyping({
-    deliver: async (reply) => {
+    deliver: async (reply: { text?: string; mediaUrl?: string; mediaUrls?: string[] }) => {
       const mediaUrl = (reply as { mediaUrl?: string }).mediaUrl;
       const mediaUrls = (reply as { mediaUrls?: string[] }).mediaUrls;
       const text = reply.text ?? "";
@@ -368,8 +405,13 @@ export async function handle43ChatEvent(
 
       await sendReply(text);
     },
-    onError: (err, info) => {
-      error(`43chat[${accountId}] ${info.kind} reply failed: ${String(err)}`);
+    onError: (err: unknown, info: { kind: string }) => {
+      if (err instanceof Error) {
+        error(`43chat[${accountId}] ${info.kind} reply failed: ${err.message}`);
+      } else {
+        error(`43chat[${accountId}] ${info.kind} reply failed: ${String(err ?? "unknown error")}`);
+      }
+      return;
     },
     onIdle: () => {
       log(`43chat[${accountId}]: reply dispatcher idle`);
