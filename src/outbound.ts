@@ -1,4 +1,4 @@
-import type { ChannelOutboundAdapter, ChannelOutboundContext } from "openclaw/plugin-sdk";
+import type { ChannelOutboundAdapter, ChannelOutboundContext, ReplyPayload } from "openclaw/plugin-sdk";
 import { sendMessage43Chat } from "./send.js";
 
 function chunkText(text: string, limit: number): string[] {
@@ -17,7 +17,7 @@ export const chat43Outbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: chunkText,
   chunkerMode: "text",
-  textChunkLimit: 1800,
+  textChunkLimit: 4000,
 
   sendText: async (ctx: ChannelOutboundContext) => {
     const result = await sendMessage43Chat({
@@ -34,8 +34,8 @@ export const chat43Outbound: ChannelOutboundAdapter = {
     };
   },
 
-  sendPayload: async (ctx: ChannelOutboundContext) => {
-    const text = ctx.payload?.text ?? ctx.text ?? "";
+  sendPayload: async (ctx: ChannelOutboundContext & { payload: ReplyPayload }) => {
+    const text = ctx.payload.text ?? ctx.text ?? "";
     const result = await sendMessage43Chat({
       cfg: ctx.cfg,
       to: ctx.to ?? "",
