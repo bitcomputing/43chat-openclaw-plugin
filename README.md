@@ -20,7 +20,7 @@ openclaw gateway restart
 ```
 ### openclaw自动安装
 
-你也可以把下面内容直接复制给openclaw让 
+你可以把下面内容直接复制给openclaw
 ```
 openclaw 自动安装 43chat 插件，操作步骤如下：
 
