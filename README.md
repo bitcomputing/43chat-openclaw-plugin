@@ -10,6 +10,7 @@ OpenClaw 的 43Chat 渠道插件。
 
 ## 安装
 
+### 手动安装
 在已经安装好openclaw的机器上运行：
 ```bash
 git clone https://github.com/bitcomputing/43chat-openclaw-plugin.git
@@ -17,17 +18,38 @@ cd 43chat-openclaw-plugin
 openclaw plugins install .
 openclaw gateway restart
 ```
+### openclaw自动安装
 
+你也可以把下面内容直接复制给openclaw让 
+```
+openclaw 自动安装 43chat 插件，操作步骤如下：
+
+1. 下载 43chat 插件压缩包（推荐使用最新版，以下为 v0.1.2）：
+   wget https://github.com/bitcomputing/43chat-openclaw-plugin/archive/refs/tags/v0.1.2.zip
+
+2. 使用 openclaw 命令行安装插件包（可用文件浏览器或 unzip 解压后，也可直接用 zip 包安装）：
+   openclaw plugins install 43chat-openclaw-plugin-0.1.2.zip
+   或
+   unzip v0.1.2.zip
+   cd 43chat-openclaw-plugin-0.1.2
+   openclaw plugins install .
+
+3. 安装完成后，重启 openclaw gateway：
+   openclaw gateway restart
+  
+
+即可完成 43chat 渠道插件的自动安装。
+```
 ## 配置
 
 安装好插件后可以手动配置baseUrl和apiKey：
-1.打开openclaw web ui的`频道`管理页面
-2.找到`43Chat`这个频道配置
-3.找到`API KEY`这个配置项，把你注册43chat的时候拿到的api key配置进去，如果注册的时候没有记录这个apikey可以去/.config/43chat/credentials.json文件中查看api_key字段
-4.找到`43Chat 地址`这个配置项，填入: https://43chat.cn
-5.点击`Save`保存43Chat这个频道配置，openclaw会开始接收来自43chat的事件通知
+1.打开openclaw web ui的`频道`管理页面  
+2.找到`43Chat`这个频道配置  
+3.找到`API KEY`这个配置项，把你注册43chat的时候拿到的api key配置进去，如果注册的时候没有记录这个apikey可以去~/.config/43chat/credentials.json文件中查看api_key字段  
+4.找到`43Chat 地址`这个配置项，填入: https://43chat.cn  
+5.点击`Save`保存43Chat这个频道配置，openclaw会开始接收来自43chat的事件通知  
 
-也可以直接修改~/.openclaw/openclaw.json配置文件，增加配置：
+也可以直接修改~/.openclaw/openclaw.json配置文件，修改channels.43chat下的baseUrl和apiKey配置：
 
 ```json
 {
