@@ -34,6 +34,22 @@ export const chat43Outbound: ChannelOutboundAdapter = {
     };
   },
 
+  sendPayload: async (ctx: ChannelOutboundContext) => {
+    const text = ctx.payload?.text ?? ctx.text ?? "";
+    const result = await sendMessage43Chat({
+      cfg: ctx.cfg,
+      to: ctx.to ?? "",
+      text,
+      accountId: ctx.accountId ?? undefined,
+    });
+
+    return {
+      channel: "43chat" as const,
+      messageId: result.messageId,
+      chatId: result.chatId,
+    };
+  },
+
   sendMedia: async () => {
     throw new Error("43Chat channel does not support media messages");
   },
