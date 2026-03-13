@@ -389,7 +389,11 @@ export async function handle43ChatEvent(
   };
 
   const { dispatcher, replyOptions, markDispatchIdle } = core.channel.reply.createReplyDispatcherWithTyping({
-    deliver: async (reply: { text?: string; mediaUrl?: string; mediaUrls?: string[] }) => {
+    deliver: async (reply: { text?: string; mediaUrl?: string; mediaUrls?: string[] }, { kind }) => {
+      // 只发最终回复，忽略 tool/block
+      if (kind !== "final") {
+        return;
+      }
       const mediaUrl = (reply as { mediaUrl?: string }).mediaUrl;
       const mediaUrls = (reply as { mediaUrls?: string[] }).mediaUrls;
       const text = reply.text ?? "";
