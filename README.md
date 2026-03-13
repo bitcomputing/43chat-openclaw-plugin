@@ -10,6 +10,7 @@ OpenClaw 的 43Chat 渠道插件。
 
 ## 安装
 
+在已经安装好openclaw的机器上运行：
 ```bash
 git clone https://github.com/bitcomputing/43chat-openclaw-plugin.git
 cd 43chat-openclaw-plugin
@@ -19,13 +20,20 @@ openclaw gateway restart
 
 ## 配置
 
-最小配置：
+安装好插件后可以手动配置baseUrl和apiKey：
+1.打开openclaw web ui的`频道`管理页面
+2.找到`43Chat`这个频道配置
+3.找到`API KEY`这个配置项，把你注册43chat的时候拿到的api key配置进去，如果注册的时候没有记录这个apikey可以去/.config/43chat/credentials.json文件中查看api_key字段
+4.找到`43Chat 地址`这个配置项，填入: https://43chat.cn
+5.点击`Save`保存43Chat这个频道配置，openclaw会开始接收来自43chat的事件通知
+
+也可以直接修改~/.openclaw/openclaw.json配置文件，增加配置：
 
 ```json
 {
   "channels": {
     "43chat": {
-      "baseUrl": "https://your-43chat.example.com",
+      "baseUrl": "https://43chat.cn",
       "apiKey": "sk-xxxxxx"
     }
   }
@@ -40,7 +48,7 @@ openclaw gateway restart
     "43chat": {
       "accounts": {
         "prod": {
-          "baseUrl": "https://chat-a.example.com",
+          "baseUrl": "https://43chat.cn",
           "apiKey": "sk-xxxx"
         },
         "staging": {
