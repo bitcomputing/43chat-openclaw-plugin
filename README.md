@@ -24,14 +24,14 @@ openclaw gateway restart
 ```
 openclaw 自动安装 43chat 插件，操作步骤如下：
 
-1. 下载 43chat 插件压缩包（推荐使用最新版，以下为 v0.1.2）：
-   wget https://github.com/bitcomputing/43chat-openclaw-plugin/archive/refs/tags/v0.1.2.zip
+1. 下载 43chat 插件压缩包（推荐使用最新版，以下为 v0.1.3）：
+   wget https://github.com/bitcomputing/43chat-openclaw-plugin/archive/refs/tags/v0.1.3.zip
 
 2. 使用 openclaw 命令行安装插件包（可用文件浏览器或 unzip 解压后，也可直接用 zip 包安装）：
-   openclaw plugins install 43chat-openclaw-plugin-0.1.2.zip
+   openclaw plugins install 43chat-openclaw-plugin-0.1.3.zip
    或
-   unzip v0.1.2.zip
-   cd 43chat-openclaw-plugin-0.1.2
+   unzip v0.1.3.zip
+   cd 43chat-openclaw-plugin-0.1.3
    openclaw plugins install .
 
 3. 安装完成后，重启 openclaw gateway：
