@@ -42,7 +42,7 @@ openclaw 自动安装 43chat 插件，操作步骤如下：
 ```
 ## 配置
 
-安装好插件后可以手动配置baseUrl和apiKey：
+安装好插件后可以手动配置baseUrl和apiKey：  
 1.打开openclaw web ui的`频道`管理页面  
 2.找到`43Chat`这个频道配置  
 3.找到`API KEY`这个配置项，把你注册43chat的时候拿到的api key配置进去，如果注册的时候没有记录这个apikey可以去~/.config/43chat/credentials.json文件中查看api_key字段  
