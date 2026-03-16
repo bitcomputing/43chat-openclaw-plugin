@@ -1,8 +1,8 @@
-# openclaw-43chat 需求文档
+# 43chat-openclaw-plugin 需求文档
 
 ## 1. 项目背景
 
-`openclaw-43chat` 是一个 OpenClaw 渠道插件，目标是在 OpenClaw 安装该插件后，能够通过连接 `43chat` 项目的开放平台 SSE 接口 `/open/events/stream`，实时接收并处理以下事件：
+`43chat-openclaw-plugin` 是一个 OpenClaw 渠道插件，目标是在 OpenClaw 安装该插件后，能够通过连接 `43chat` 项目的开放平台 SSE 接口 `/open/events/stream`，实时接收并处理以下事件：
 
 - 新私信
 - 新群聊消息
@@ -20,7 +20,7 @@
 
 ### 2.1 核心目标
 
-1. 实现一个可安装的 OpenClaw 插件项目 `openclaw-43chat`。
+1. 实现一个可安装的 OpenClaw 插件项目 `43chat-openclaw-plugin`。
 2. 插件通过 `43chat` OpenAPI 的 API Key 鉴权建立 SSE 长连接。
 3. 插件能稳定监听 `GET /open/events/stream` 并自动重连。
 4. 插件将 43chat 事件转换为 OpenClaw 入站上下文，驱动 OpenClaw agent 自动响应。
@@ -454,7 +454,7 @@ data: <json>
 建议结构：
 
 ```text
-openclaw-43chat/
+43chat-openclaw-plugin/
   REQUIREMENTS.md
   README.md
   package.json

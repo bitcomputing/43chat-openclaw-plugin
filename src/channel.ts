@@ -68,7 +68,7 @@ export const chat43Plugin: ChannelPlugin<Resolved43ChatAccount> = {
       additionalProperties: false,
       properties: {
         enabled: { type: "boolean", default: true, title: "启用账号" },
-        baseUrl: { type: "string", format: "uri", title: "43Chat 地址" },
+        baseUrl: { type: "string", format: "uri", default: "https://43chat.cn", title: "43Chat 地址" },
         apiKey: { type: "string", title: "API Key" },
         dmPolicy: {
           type: "string",
@@ -119,7 +119,7 @@ export const chat43Plugin: ChannelPlugin<Resolved43ChatAccount> = {
             properties: {
               enabled: { type: "boolean", default: true, title: "启用账号" },
               name: { type: "string", title: "账号名称" },
-              baseUrl: { type: "string", format: "uri", title: "43Chat 地址" },
+              baseUrl: { type: "string", default: "https://43chat.cn", format: "uri", title: "43Chat 地址" },
               apiKey: { type: "string", title: "API Key" },
               requestTimeoutMs: { type: "integer", minimum: 1000, title: "请求超时(ms)" },
               sseReconnectDelayMs: { type: "integer", minimum: 100, title: "SSE重连起始延迟(ms)" },

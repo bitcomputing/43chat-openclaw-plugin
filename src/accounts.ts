@@ -1,5 +1,8 @@
 import type { ClawdbotConfig } from "openclaw/plugin-sdk";
 import type { Chat43Config, Resolved43ChatAccount } from "./types.js";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 const DEFAULT_ACCOUNT_ID = "default";
 
@@ -31,8 +34,34 @@ export function resolve43ChatAccount({
   const chatCfg = cfg.channels?.["43chat"] as Chat43Config | undefined;
   const isDefault = accountId === DEFAULT_ACCOUNT_ID;
 
-  const topLevelBaseUrl = normalizeBaseUrl(readOptionalNonBlankString(chatCfg?.baseUrl));
-  const topLevelApiKey = readOptionalNonBlankString(chatCfg?.apiKey);
+
+
+  let topLevelBaseUrl: string | undefined;
+  let topLevelApiKey: string | undefined;
+
+  // Determine apiKey
+  if (!chatCfg || !readOptionalNonBlankString(chatCfg.apiKey)) {
+    // Try to read api_key from ~/.config/43chat/credentials.json
+    try {
+      const credPath = join(homedir(), ".config", "43chat", "credentials.json");
+      const content = readFileSync(credPath, "utf-8");
+      const parsed = JSON.parse(content);
+      if (parsed && typeof parsed.api_key === "string" && parsed.api_key.trim()) {
+        topLevelApiKey = parsed.api_key.trim();
+      }
+    } catch {
+      topLevelApiKey = undefined;
+    }
+  } else {
+    topLevelApiKey = readOptionalNonBlankString(chatCfg.apiKey);
+  }
+
+  // Determine baseUrl
+  if (!chatCfg || !readOptionalNonBlankString(chatCfg.baseUrl)) {
+    topLevelBaseUrl = "https://43chat.cn";
+  } else {
+    topLevelBaseUrl = normalizeBaseUrl(readOptionalNonBlankString(chatCfg.baseUrl));
+  }
 
   if (isDefault && chatCfg) {
     const configured = Boolean(topLevelBaseUrl && topLevelApiKey);
