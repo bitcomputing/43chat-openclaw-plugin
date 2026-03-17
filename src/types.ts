@@ -63,6 +63,7 @@ export type Chat43SSEEventEnvelope<T = unknown> = {
 export type Chat43PrivateMessageEventData = {
   message_id: string;
   from_user_id: number;
+  from_nickname: string;
   to_user_id: number;
   content: string;
   content_type: string;
@@ -73,6 +74,7 @@ export type Chat43GroupMessageEventData = {
   message_id: string;
   group_id: number;
   from_user_id: number;
+  from_nickname: string;
   content: string;
   content_type: string;
   timestamp: number;
