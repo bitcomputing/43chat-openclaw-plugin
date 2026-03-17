@@ -1,6 +1,7 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { chat43Plugin } from "./src/channel.js";
 import { set43ChatRuntime } from "./src/runtime.js";
+import packageJson from "./package.json" with { type: "json" };
 
 export { monitor43ChatProvider } from "./src/monitor.js";
 export { sendMessage43Chat } from "./src/send.js";
@@ -9,7 +10,7 @@ export { chat43Plugin } from "./src/channel.js";
 const plugin = {
   id: "43chat",
   name: "43Chat",
-  version: "0.1.5",
+  version: packageJson.version,
   description: "43Chat OpenAPI + SSE channel plugin",
   configSchema: { type: "object" as const, properties: {} },
   register(api: OpenClawPluginApi) {

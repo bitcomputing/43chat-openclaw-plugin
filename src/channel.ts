@@ -9,6 +9,7 @@ import { chat43Outbound } from "./outbound.js";
 import { probe43ChatAccount } from "./client.js";
 import { looksLike43ChatId, normalize43ChatTarget } from "./targets.js";
 import { sendMessage43Chat } from "./send.js";
+import packageJson from "../package.json" with { type: "json" };
 
 const DEFAULT_ACCOUNT_ID = "default";
 const PAIRING_APPROVED_MESSAGE = "✓ You have been approved to chat with this agent.";
@@ -21,6 +22,7 @@ const meta = {
   docsLabel: "43chat",
   blurb: "43Chat OpenAPI + SSE channel.",
   order: 85,
+  version: packageJson.version,
 };
 
 export const chat43Plugin: ChannelPlugin<Resolved43ChatAccount> = {
@@ -70,6 +72,7 @@ export const chat43Plugin: ChannelPlugin<Resolved43ChatAccount> = {
         enabled: { type: "boolean", default: true, title: "启用账号" },
         baseUrl: { type: "string", format: "uri", default: "https://43chat.cn", title: "43Chat 地址" },
         apiKey: { type: "string", title: "API Key" },
+        version: { type: "string", default: packageJson.version, title: "当前插件版本" },
         dmPolicy: {
           type: "string",
           enum: ["open", "pairing"],

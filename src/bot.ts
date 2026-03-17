@@ -379,6 +379,7 @@ export async function handle43ChatEvent(
     ?? core.channel.text.resolveChunkMode(cfg, "43chat", accountId);
 
   const sendReply = async (text: string): Promise<void> => {
+    log(`43chat[${accountId}]: send reply ${text}`);
     const chunks = chunkReplyText(
       text,
       chunkMode,
@@ -397,8 +398,13 @@ export async function handle43ChatEvent(
   };
 
   const { dispatcher, replyOptions, markDispatchIdle } = core.channel.reply.createReplyDispatcherWithTyping({
-    deliver: async (reply: { text?: string; mediaUrl?: string; mediaUrls?: string[] }, { kind }) => {
+    deliver: async (reply: { text?: string; mediaUrl?: string; mediaUrls?: string[]; replyToCurrent?: boolean}, { kind }) => {
       log(`43chat[${accountId}]: reply ${kind} ${JSON.stringify(reply)}`);
+      // 此处暂时不回复消息
+      if (!reply.replyToCurrent) {
+        log(`43chat[${accountId}]: reply ${kind} ${JSON.stringify(reply)} not reply to current`);
+        return;
+      }
       // 只发最终回复，忽略 tool/block
       if (kind !== "final") {
         return;
