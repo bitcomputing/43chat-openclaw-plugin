@@ -85,26 +85,27 @@ function buildInboundDescriptor(event: Chat43AnySSEEvent): InboundDescriptor | n
     case "private_message": {
       const data = event.data as Chat43PrivateMessageEventData;
       const senderId = String(data.from_user_id);
+      const senderName = data.from_nickname || senderId;
       const content = String(data.content ?? "").trim();
       let text: string;
       switch (data.content_type) {
         case "text":
-          text = `[43Chat私聊消息][类型：文本][来自：${senderId}][内容：${content}]`;
+          text = `[43Chat私聊消息][类型：文本][来自用户：${senderName} 用户ID：${senderId}][内容：${content}]`;
           break;
         case "image":
-          text = `[43Chat私聊消息][类型：图片][来自：${senderId}][图片对象：${content || "<empty>"}]`;
+          text = `[43Chat私聊消息][类型：图片][来自用户：${senderName} 用户ID：${senderId}][图片对象：${content || "<empty>"}]`;
           break;
         case "file":
-          text = `[43Chat私聊消息][类型：文件][来自：${senderId}][文件对象：${content || "<empty>"}]`;
+          text = `[43Chat私聊消息][类型：文件][来自用户：${senderName} 用户ID：${senderId}][文件对象：${content || "<empty>"}]`;
           break;
         case "sharegroup":
-          text = `[43Chat私聊消息][类型：群组卡片][来自：${senderId}][卡片对象：${content || "<empty>"}]`;
+          text = `[43Chat私聊消息][类型：群组卡片][来自用户：${senderName} 用户ID：${senderId}][卡片对象：${content || "<empty>"}]`;
           break;
         case "shareuser":
-          text = `[43Chat私聊消息][类型：用户卡片][来自：${senderId}][卡片对象：${content || "<empty>"}]`;
+          text = `[43Chat私聊消息][类型：用户卡片][来自用户：${senderName} 用户ID：${senderId}][卡片对象：${content || "<empty>"}]`;
           break;
         default:
-          text = `[43Chat私聊消息][类型：${data.content_type}][来自：${senderId}][内容：${content || "<empty>"}]`;
+          text = `[43Chat私聊消息][类型：${data.content_type}][来自用户：${senderName} 用户ID：${senderId}][内容：${content || "<empty>"}]`;
           break;
       }
       if (!text) {
@@ -127,26 +128,27 @@ function buildInboundDescriptor(event: Chat43AnySSEEvent): InboundDescriptor | n
       const data = event.data as Chat43GroupMessageEventData;
       const groupId = String(data.group_id);
       const senderId = String(data.from_user_id);
+      const senderName = data.from_nickname || senderId;
       const content = String(data.content ?? "").trim();
       let text: string;
       switch (data.content_type) {
         case "text":
-          text = `[43Chat群消息][类型：文本][来自：${senderId}][内容：${content}]`;
+          text = `[43Chat群消息][类型：文本][来自用户：${senderName} 用户ID：${senderId}][内容：${content}]`;
           break;
         case "image":
-          text = `[43Chat群消息][类型：图片][来自：${senderId}][图片对象：${content || "<empty>"}]`;
+          text = `[43Chat群消息][类型：图片][来自用户：${senderName} 用户ID：${senderId}][图片对象：${content || "<empty>"}]`;
           break;
         case "file":
-          text = `[43Chat群消息][类型：文件][来自：${senderId}][文件对象：${content || "<empty>"}]`;
+          text = `[43Chat群消息][类型：文件][来自用户：${senderName} 用户ID：${senderId}][文件对象：${content || "<empty>"}]`;
           break;
         case "sharegroup":
-          text = `[43Chat群消息][类型：群组卡片][来自：${senderId}][卡片对象：${content || "<empty>"}]`;
+          text = `[43Chat群消息][类型：群组卡片][来自用户：${senderName} 用户ID：${senderId}][卡片对象：${content || "<empty>"}]`;
           break;
         case "shareuser":
-          text = `[43Chat群消息][类型：用户卡片][来自：${senderId}][卡片对象：${content || "<empty>"}]`;
+          text = `[43Chat群消息][类型：用户卡片][来自用户：${senderName} 用户ID：${senderId}][卡片对象：${content || "<empty>"}]`;
           break;
         default:
-          text = `[43Chat群消息][类型：${data.content_type}][来自：${senderId}][内容：${content || "<empty>"}]`;
+          text = `[43Chat群消息][类型：${data.content_type}][来自用户：${senderName} 用户ID：${senderId}][内容：${content || "<empty>"}]`;
           break;
       }
       if (!text) {
@@ -396,6 +398,7 @@ export async function handle43ChatEvent(
 
   const { dispatcher, replyOptions, markDispatchIdle } = core.channel.reply.createReplyDispatcherWithTyping({
     deliver: async (reply: { text?: string; mediaUrl?: string; mediaUrls?: string[] }, { kind }) => {
+      log(`43chat[${accountId}]: reply ${kind} ${JSON.stringify(reply)}`);
       // 只发最终回复，忽略 tool/block
       if (kind !== "final") {
         return;
@@ -412,7 +415,6 @@ export async function handle43ChatEvent(
       if (!text.trim()) {
         return;
       }
-
       await sendReply(text);
     },
     onError: (err: unknown, info: { kind: string }) => {
