@@ -288,6 +288,12 @@ export async function handle43ChatEvent(
   const log = runtime?.log ?? consoleRef?.log?.bind(consoleRef) ?? (() => {});
   const error = runtime?.error ?? consoleRef?.error?.bind(consoleRef) ?? (() => {});
 
+  log(
+    `43chat[${accountId}]: inbound event ${event.event_type} (${resolveBusinessId(event)}) ${JSON.stringify(
+      event,
+    )}`,
+  );
+
   const account = resolve43ChatAccount({ cfg, accountId });
   if (!account.enabled || !account.configured) {
     error(`43chat[${accountId}]: account not enabled or configured`);
