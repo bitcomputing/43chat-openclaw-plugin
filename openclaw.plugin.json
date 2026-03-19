@@ -1,7 +1,7 @@
 {
-  "id": "43chat",
+  "id": "43chat-openclaw-plugin",
   "channels": [
-    "43chat"
+    "43chat-openclaw-plugin"
   ],
   "configSchema": {
     "type": "object",

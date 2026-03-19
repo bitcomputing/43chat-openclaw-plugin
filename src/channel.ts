@@ -15,7 +15,7 @@ const DEFAULT_ACCOUNT_ID = "default";
 const PAIRING_APPROVED_MESSAGE = "✓ You have been approved to chat with this agent.";
 
 const meta = {
-  id: "43chat",
+  id: packageJson.openclaw.channel.id,
   label: "43Chat",
   selectionLabel: "43Chat",
   docsPath: "/channels/43chat",
@@ -26,7 +26,7 @@ const meta = {
 };
 
 export const chat43Plugin: ChannelPlugin<Resolved43ChatAccount> = {
-  id: "43chat",
+  id: packageJson.openclaw.channel.id,
   meta,
 
   pairing: {

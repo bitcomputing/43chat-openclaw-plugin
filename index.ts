@@ -8,7 +8,7 @@ export { sendMessage43Chat } from "./src/send.js";
 export { chat43Plugin } from "./src/channel.js";
 
 const plugin = {
-  id: "43chat",
+  id: packageJson.openclaw.channel.id,
   name: "43Chat",
   version: packageJson.version,
   description: "43Chat OpenAPI + SSE channel plugin",
