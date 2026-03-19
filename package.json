@@ -1,8 +1,8 @@
 {
-  "name": "@wecode-ai-openclaw/43chat",
+  "name": "@43world/43chat-openclaw-plugin",
   "version": "0.1.6",
   "type": "module",
-  "description": "OpenClaw 43Chat channel plugin",
+  "description": "43World: 43Chat OpenClaw channel plugin",
   "scripts": {
     "test:unit": "vitest run",
     "ci:check": "npx tsc --noEmit && npm run test:unit",
