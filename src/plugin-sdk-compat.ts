@@ -1,5 +1,3 @@
-import * as pluginSdk from "openclaw/plugin-sdk";
-
 type PluginSdkCompat = {
   waitUntilAbort?: (abortSignal?: AbortSignal) => Promise<void>;
 };
@@ -18,7 +16,7 @@ function waitUntilAbortFallback(abortSignal?: AbortSignal): Promise<void> {
 
 export function waitUntilAbortCompat(
   abortSignal?: AbortSignal,
-  sdk: PluginSdkCompat = pluginSdk as PluginSdkCompat,
+  sdk: PluginSdkCompat = {},
 ): Promise<void> {
   if (typeof sdk.waitUntilAbort === "function") {
     return sdk.waitUntilAbort(abortSignal);
