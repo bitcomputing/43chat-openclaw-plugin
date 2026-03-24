@@ -90,22 +90,22 @@ function buildInboundDescriptor(event: Chat43AnySSEEvent): InboundDescriptor | n
       let text: string;
       switch (data.content_type) {
         case "text":
-          text = `[43Chat私聊消息][类型：文本][来自用户：${senderName} 用户ID：${senderId}][内容：${content}]`;
+          text = `[43Chat私聊消息][类型：文本][来源用户昵称：${senderName}][来源用户ID：${senderId}][内容：${content}]`;
           break;
         case "image":
-          text = `[43Chat私聊消息][类型：图片][来自用户：${senderName} 用户ID：${senderId}][图片对象：${content || "<empty>"}]`;
+          text = `[43Chat私聊消息][类型：图片][来源用户昵称：${senderName}][来源用户ID：${senderId}][图片对象：${content || "<empty>"}]`;
           break;
         case "file":
-          text = `[43Chat私聊消息][类型：文件][来自用户：${senderName} 用户ID：${senderId}][文件对象：${content || "<empty>"}]`;
+          text = `[43Chat私聊消息][类型：文件][来源用户昵称：${senderName}][来源用户ID：${senderId}][文件对象：${content || "<empty>"}]`;
           break;
         case "sharegroup":
-          text = `[43Chat私聊消息][类型：群组卡片][来自用户：${senderName} 用户ID：${senderId}][卡片对象：${content || "<empty>"}]`;
+          text = `[43Chat私聊消息][类型：群组卡片][来源用户昵称：${senderName}][来源用户ID：${senderId}][卡片对象：${content || "<empty>"}]`;
           break;
         case "shareuser":
-          text = `[43Chat私聊消息][类型：用户卡片][来自用户：${senderName} 用户ID：${senderId}][卡片对象：${content || "<empty>"}]`;
+          text = `[43Chat私聊消息][类型：用户卡片][来源用户昵称：${senderName}][来源用户ID：${senderId}][卡片对象：${content || "<empty>"}]`;
           break;
         default:
-          text = `[43Chat私聊消息][类型：${data.content_type}][来自用户：${senderName} 用户ID：${senderId}][内容：${content || "<empty>"}]`;
+          text = `[43Chat私聊消息][类型：${data.content_type}][来源用户昵称：${senderName}][来源用户ID：${senderId}][内容：${content || "<empty>"}]`;
           break;
       }
       if (!text) {
@@ -133,22 +133,22 @@ function buildInboundDescriptor(event: Chat43AnySSEEvent): InboundDescriptor | n
       let text: string;
       switch (data.content_type) {
         case "text":
-          text = `[43Chat群消息][类型：文本][来自用户：${senderName} 用户ID：${senderId}][内容：${content}]`;
+          text = `[43Chat群消息][类型：文本][来源用户昵称：${senderName}][来源用户ID：${senderId}][内容：${content}]`;
           break;
         case "image":
-          text = `[43Chat群消息][类型：图片][来自用户：${senderName} 用户ID：${senderId}][图片对象：${content || "<empty>"}]`;
+          text = `[43Chat群消息][类型：图片][来源用户昵称：${senderName}][来源用户ID：${senderId}][图片对象：${content || "<empty>"}]`;
           break;
         case "file":
-          text = `[43Chat群消息][类型：文件][来自用户：${senderName} 用户ID：${senderId}][文件对象：${content || "<empty>"}]`;
+          text = `[43Chat群消息][类型：文件][来源用户昵称：${senderName}][来源用户ID：${senderId}][文件对象：${content || "<empty>"}]`;
           break;
         case "sharegroup":
-          text = `[43Chat群消息][类型：群组卡片][来自用户：${senderName} 用户ID：${senderId}][卡片对象：${content || "<empty>"}]`;
+          text = `[43Chat群消息][类型：群组卡片][来源用户昵称：${senderName}][来源用户ID：${senderId}][卡片对象：${content || "<empty>"}]`;
           break;
         case "shareuser":
-          text = `[43Chat群消息][类型：用户卡片][来自用户：${senderName} 用户ID：${senderId}][卡片对象：${content || "<empty>"}]`;
+          text = `[43Chat群消息][类型：用户卡片][来源用户昵称：${senderName}][来源用户ID：${senderId}][卡片对象：${content || "<empty>"}]`;
           break;
         default:
-          text = `[43Chat群消息][类型：${data.content_type}][来自用户：${senderName} 用户ID：${senderId}][内容：${content || "<empty>"}]`;
+          text = `[43Chat群消息][类型：${data.content_type}][来源用户昵称：${senderName}][来源用户ID：${senderId}][内容：${content || "<empty>"}]`;
           break;
       }
       if (!text) {
