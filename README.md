@@ -29,6 +29,18 @@ openclaw 自动更新插件：
   openclaw plugins update 43chat-openclaw-plugin
 
 ```
+安装好插件后检查~/.openclaw/openclaw.json文件中的配置
+
+plugins.entries配置中包含：
+```json
+  "43chat-openclaw-plugin": {
+    "enabled": true
+  }
+```
+
+plugins.allow配置中包含："43chat-openclaw-plugin"
+
+
 ## 配置
 默认安装好会自动读取注册43chat时保存的~/.config/43chat/credentials.json这个文件内的api_key配置
 
@@ -40,12 +52,14 @@ openclaw 自动更新插件：
 4.找到`43Chat 地址`这个配置项，填入: https://43chat.cn  
 5.点击`Save`保存43Chat这个频道配置，openclaw会开始接收来自43chat的事件通知  
 
-也可以直接修改~/.openclaw/openclaw.json配置文件，修改channels.43chat下的baseUrl和apiKey配置：
+
+
+也可以直接修改~/.openclaw/openclaw.json配置文件，修改channels.43chat-openclaw-plugin下的baseUrl和apiKey配置：
 
 ```json
 {
   "channels": {
-    "43chat": {
+    "43chat-openclaw-plugin": {
       "baseUrl": "https://43chat.cn",
       "apiKey": "sk-xxxxxx"
     }
@@ -58,7 +72,7 @@ openclaw 自动更新插件：
 ```json
 {
   "channels": {
-    "43chat": {
+    "43chat-openclaw-plugin": {
       "accounts": {
         "prod": {
           "baseUrl": "https://43chat.cn",
