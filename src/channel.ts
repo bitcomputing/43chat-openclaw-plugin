@@ -62,9 +62,9 @@ export const chat43Plugin: ChannelPlugin<Resolved43ChatAccount> = {
     ],
   },
 
-  reload: { configPrefixes: ["channels.43chat"] },
+  reload: { configPrefixes: ["channels.43chat-openclaw-plugin"] },
 
-  configSchema: {
+  configSchema: { 
     schema: {
       type: "object",
       additionalProperties: false,
@@ -165,20 +165,20 @@ export const chat43Plugin: ChannelPlugin<Resolved43ChatAccount> = {
           ...cfg,
           channels: {
             ...cfg.channels,
-            ["43chat"]: {
-              ...(cfg.channels?.["43chat"] as Record<string, unknown> | undefined),
+            ["43chat-openclaw-plugin"]: {
+              ...(cfg.channels?.["43chat-openclaw-plugin"] as Record<string, unknown> | undefined),
               enabled,
             },
           },
         };
       }
 
-      const chatCfg = cfg.channels?.["43chat"] as Chat43Config | undefined;
+      const chatCfg = cfg.channels?.["43chat-openclaw-plugin"] as Chat43Config | undefined;
       return {
         ...cfg,
         channels: {
           ...cfg.channels,
-          ["43chat"]: {
+          ["43chat-openclaw-plugin"]: {
             ...chatCfg,
             accounts: {
               ...chatCfg?.accounts,
@@ -201,7 +201,7 @@ export const chat43Plugin: ChannelPlugin<Resolved43ChatAccount> = {
       if (accountId === DEFAULT_ACCOUNT_ID) {
         const next = { ...cfg } as ClawdbotConfig;
         const nextChannels = { ...cfg.channels };
-        delete (nextChannels as Record<string, unknown>)["43chat"];
+        delete (nextChannels as Record<string, unknown>)["43chat-openclaw-plugin"];
         if (Object.keys(nextChannels).length > 0) {
           next.channels = nextChannels;
         } else {
@@ -210,14 +210,14 @@ export const chat43Plugin: ChannelPlugin<Resolved43ChatAccount> = {
         return next;
       }
 
-      const chatCfg = cfg.channels?.["43chat"] as Chat43Config | undefined;
+      const chatCfg = cfg.channels?.["43chat-openclaw-plugin"] as Chat43Config | undefined;
       const accounts = { ...chatCfg?.accounts };
       delete accounts[accountId];
       return {
         ...cfg,
         channels: {
           ...cfg.channels,
-          ["43chat"]: {
+          ["43chat-openclaw-plugin"]: {
             ...chatCfg,
             accounts: Object.keys(accounts).length > 0 ? accounts : undefined,
           },
@@ -269,20 +269,20 @@ export const chat43Plugin: ChannelPlugin<Resolved43ChatAccount> = {
           ...cfg,
           channels: {
             ...cfg.channels,
-            ["43chat"]: {
-              ...(cfg.channels?.["43chat"] as Record<string, unknown> | undefined),
+            ["43chat-openclaw-plugin"]: {
+              ...(cfg.channels?.["43chat-openclaw-plugin"] as Record<string, unknown> | undefined),
               enabled: true,
             },
           },
         };
       }
 
-      const chatCfg = cfg.channels?.["43chat"] as Chat43Config | undefined;
+      const chatCfg = cfg.channels?.["43chat-openclaw-plugin"] as Chat43Config | undefined;
       return {
         ...cfg,
         channels: {
           ...cfg.channels,
-          ["43chat"]: {
+          ["43chat-openclaw-plugin"]: {
             ...chatCfg,
             accounts: {
               ...chatCfg?.accounts,
