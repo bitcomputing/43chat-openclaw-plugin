@@ -314,7 +314,7 @@ export async function handle43ChatEvent(
   const core = get43ChatRuntime();
   const route = core.channel.routing.resolveAgentRoute({
     cfg,
-    channel: "43chat",
+    channel: "43chat-openclaw-plugin",
     accountId,
     peer: {
       kind: inbound.chatType === "group" ? "group" : "direct",
@@ -336,7 +336,7 @@ export async function handle43ChatEvent(
   });
 
   const body = core.channel.reply.formatInboundEnvelope({
-    channel: "43Chat",
+    channel: "43Chat-openclaw-plugin",  
     from: inbound.conversationLabel,
     body: inbound.text,
     timestamp: inbound.timestamp,
@@ -368,7 +368,7 @@ export async function handle43ChatEvent(
     Timestamp: inbound.timestamp,
     WasMentioned: true,
     CommandAuthorized: true,
-    OriginatingChannel: "43chat" as const,
+    OriginatingChannel: "43chat-openclaw-plugin" as const,
     OriginatingTo: inbound.target,
   });
 

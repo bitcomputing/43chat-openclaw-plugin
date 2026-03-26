@@ -30,7 +30,7 @@ export const chat43Outbound: ChannelOutboundAdapter = {
     });
     log(`43chat[${ctx.accountId}]: send text result ${result.messageId} ${result.chatId}`);
     return {
-      channel: "43chat" as const,
+      channel: "43chat-openclaw-plugin" as const,
       messageId: result.messageId,
       chatId: result.chatId,
     };
@@ -47,7 +47,7 @@ export const chat43Outbound: ChannelOutboundAdapter = {
     });
     log(`43chat[${ctx.accountId}]: send payload result ${result.messageId} ${result.chatId}`);
     return {
-      channel: "43chat" as const,
+      channel: "43chat-openclaw-plugin" as const,
       messageId: result.messageId,
       chatId: result.chatId,
     };

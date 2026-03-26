@@ -31,7 +31,7 @@ export function resolve43ChatAccount({
   cfg: ClawdbotConfig;
   accountId?: string;
 }): Resolved43ChatAccount {
-  const chatCfg = cfg.channels?.["43chat"] as Chat43Config | undefined;
+  const chatCfg = cfg.channels?.["43chat-openclaw-plugin"] as Chat43Config | undefined;
   const isDefault = accountId === DEFAULT_ACCOUNT_ID;
 
 
@@ -118,7 +118,7 @@ export function resolve43ChatAccount({
 }
 
 export function list43ChatAccountIds(cfg: ClawdbotConfig): string[] {
-  const chatCfg = cfg.channels?.["43chat"] as Chat43Config | undefined;
+  const chatCfg = cfg.channels?.["43chat-openclaw-plugin"] as Chat43Config | undefined;
   const ids = [DEFAULT_ACCOUNT_ID];
   if (chatCfg?.accounts) {
     ids.push(...Object.keys(chatCfg.accounts));
