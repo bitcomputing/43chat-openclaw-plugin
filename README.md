@@ -71,12 +71,12 @@ plugins.installs配置中包含"43chat-openclaw-plugin"值,示例如下：
 
 
 
-也可以直接修改~/.openclaw/openclaw.json配置文件，修改channels.43chat-openclaw-plugin下的baseUrl和apiKey配置：
+也可以直接修改~/.openclaw/openclaw.json配置文件，修改channels.43chat下的baseUrl和apiKey配置：
 
 ```json
 {
   "channels": {
-    "43chat-openclaw-plugin": {
+    "43chat": {
       "baseUrl": "https://43chat.cn",
       "apiKey": "sk-xxxxxx"
     }
@@ -89,7 +89,7 @@ plugins.installs配置中包含"43chat-openclaw-plugin"值,示例如下：
 ```json
 {
   "channels": {
-    "43chat-openclaw-plugin": {
+    "43chat": {
       "accounts": {
         "prod": {
           "baseUrl": "https://43chat.cn",
