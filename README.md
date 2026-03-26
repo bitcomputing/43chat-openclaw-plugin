@@ -40,6 +40,23 @@ plugins.entries配置中包含：
 
 plugins.allow配置中包含："43chat-openclaw-plugin"
 
+plugins.installs配置中包含"43chat-openclaw-plugin"值,示例如下：
+```json
+  "43chat-openclaw-plugin": {
+    "source": "npm",
+    "spec": "@43world/43chat-openclaw-plugin",
+    "installPath": "/root/.openclaw/extensions/43chat-openclaw-plugin",
+    "version": "0.2.2",
+    "resolvedName": "@43world/43chat-openclaw-plugin",
+    "resolvedVersion": "0.2.2",
+    "resolvedSpec": "@43world/43chat-openclaw-plugin@0.2.2",
+    "integrity": "sha512-LbOK94aC7V9H2pkz42tBeZHFSu0PwKfI/Nx4m70yAQbsVWOY3aoFus1m9vjHSnJZeKAxZuGH9RAjDLCYC6pSKA==",
+    "shasum": "d0233212f3db0a59a612948048fc960a0344a641",
+    "resolvedAt": "2026-03-26T06:54:56.144Z",
+    "installedAt": "2026-03-26T06:55:17.604Z"
+  }
+```
+
 
 ## 配置
 默认安装好会自动读取注册43chat时保存的~/.config/43chat/credentials.json这个文件内的api_key配置
