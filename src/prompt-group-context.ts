@@ -96,7 +96,7 @@ export function getPromptGroupContextHints(accountId: string, maxItems = 8): str
   ];
   for (const group of snapshot.groups.slice(0, Math.max(1, maxItems))) {
     hints.push(
-      `  - group:${group.groupId}${group.groupName ? `（${group.groupName}）` : ""}${group.role ? `，身份：${group.role}` : ""}`,
+      `  - group:${group.groupId}${group.groupName ? `（${group.groupName}）` : ""}${group.role ? `，在群内身份为：${group.role}` : ""}`,
     );
   }
   return hints;
@@ -111,6 +111,7 @@ export async function refreshPromptGroupContext(params: {
   const response = await client.requestJson<unknown>(apiPath, {
     method: "GET",
   });
+
   const groups = parseGroupContextItems(response);
   snapshotByAccountId.set(account.accountId, {
     updatedAt: Date.now(),
@@ -127,7 +128,7 @@ export function startPromptGroupContextRefresher(params: {
   const enabled = account.config.promptGroupContextEnabled ?? false;
   const refreshMs = account.config.promptGroupContextRefreshMs ?? 60_000;
 
-  stopPromptGroupContextRefresher(account.accountId);
+  stopPromptGroupContextRefresher(account.accountId, runtime);
 
   if (!enabled || !apiPath) {
     runtime?.log?.(
@@ -140,7 +141,7 @@ export function startPromptGroupContextRefresher(params: {
     try {
       await refreshPromptGroupContext({ account, apiPath });
       runtime?.log?.(
-        `43chat[${account.accountId}]: prompt group context refreshed (${apiPath})`,
+        `43chat[${account.accountId}]: prompt group context refreshed (${apiPath}), groups: ${JSON.stringify(snapshotByAccountId.get(account.accountId)?.groups)}`,
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -165,11 +166,14 @@ export function startPromptGroupContextRefresher(params: {
   );
 }
 
-export function stopPromptGroupContextRefresher(accountId: string): void {
+export function stopPromptGroupContextRefresher(accountId: string, runtime?: { log?: (msg: string) => void }): void {
   const timer = refreshTimerByAccountId.get(accountId);
   if (timer) {
     clearInterval(timer);
     refreshTimerByAccountId.delete(accountId);
   }
+  runtime?.log?.(
+    `43chat[${accountId}]: prompt group context refresher stopped`,
+  );
 }
 

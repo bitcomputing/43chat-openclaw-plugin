@@ -144,12 +144,14 @@ async function monitorSingleAccount(params: {
               connected: true,
               connectionState: "connected",
             });
+            log(`43chat[${accountId}]: SSE heartbeat`);
           },
           onInvalidFrame: (frame, reason) => {
             error(`43chat[${accountId}]: invalid SSE frame (${reason}): ${JSON.stringify(frame)}`);
           },
           onEvent: async (event) => {
             emitStatus({ lastInboundAt: Date.now() });
+            log(`43chat[${accountId}]: SSE event: ${JSON.stringify(event)}`);
             await handle43ChatEvent({
               cfg,
               event,
@@ -224,7 +226,7 @@ async function monitorSingleAccount(params: {
       }
     }
   } finally {
-    stopPromptGroupContextRefresher(accountId);
+    stopPromptGroupContextRefresher(accountId, runtime); 
     if (monitorControllers.get(accountId) === localController) {
       monitorControllers.delete(accountId);
     }

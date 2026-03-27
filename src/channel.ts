@@ -115,16 +115,18 @@ export const chat43Plugin: ChannelPlugin<Resolved43ChatAccount> = {
         },
         promptGroupContextApiPath: {
           type: "string",
-          default: "/open/agent/groups",
+          default: "/open/group/list",
           title: "群组身份拉取API路径",
         },
         promptGroupContextRefreshMs: {
           type: "integer",
+          default: 60000,
           minimum: 5000,
           title: "群组身份刷新间隔(ms)",
         },
         promptGroupContextMaxItems: {
           type: "integer",
+          default: 50,
           minimum: 1,
           title: "Prompt中最多注入群组条数",
         },
@@ -163,16 +165,18 @@ export const chat43Plugin: ChannelPlugin<Resolved43ChatAccount> = {
               },
               promptGroupContextApiPath: {
                 type: "string",
-                default: "/open/agent/groups",
+                default: "/open/group/list",
                 title: "群组身份拉取API路径",
               },
               promptGroupContextRefreshMs: {
                 type: "integer",
+                default: 60000,
                 minimum: 5000,
                 title: "群组身份刷新间隔(ms)",
               },
               promptGroupContextMaxItems: {
                 type: "integer",
+                default: 50,
                 minimum: 1,
                 title: "Prompt中最多注入群组条数",
               },
