@@ -42,8 +42,10 @@ function parseGroupContextItems(payload: unknown): GroupContextItem[] {
 
   const candidates = [
     root.groups,
+    root.list,
     root.group_list,
     toPlainObject(root.data)?.groups,
+    toPlainObject(root.data)?.list,
     toPlainObject(root.data)?.group_list,
   ];
 
