@@ -94,11 +94,11 @@ export function getPromptGroupContextHints(accountId: string, maxItems = 8): str
   }
 
   const hints: string[] = [
-    `- 43Chat 群组上下文（最近刷新：${new Date(snapshot.updatedAt).toISOString()}）：`,
+    `- 你在43Chat中已加入的群组以及你在群内的身份如下，可用于在回复43chat消息时提供上下文信息（下面的群组列表身份信息会通过43chat-openclaw-plugin自动更新，最近更新：${new Date(snapshot.updatedAt).toISOString()}）：`,
   ];
   for (const group of snapshot.groups.slice(0, Math.max(1, maxItems))) {
     hints.push(
-      `  - group:${group.groupId}${group.groupName ? `（${group.groupName}）` : ""}${group.role ? `，在群内身份为：${group.role}` : ""}`,
+      `  -- group:${group.groupId}${group.groupName ? `（${group.groupName}）` : ""}${group.role ? `，在群内身份为：${group.role}` : ""}`,
     );
   }
   return hints;
