@@ -80,6 +80,10 @@ export function resolve43ChatAccount({
         requestTimeoutMs: chatCfg.requestTimeoutMs,
         sseReconnectDelayMs: chatCfg.sseReconnectDelayMs,
         sseMaxReconnectDelayMs: chatCfg.sseMaxReconnectDelayMs,
+        promptGroupContextEnabled: chatCfg.promptGroupContextEnabled,
+        promptGroupContextApiPath: chatCfg.promptGroupContextApiPath,
+        promptGroupContextRefreshMs: chatCfg.promptGroupContextRefreshMs,
+        promptGroupContextMaxItems: chatCfg.promptGroupContextMaxItems,
         textChunkLimit: chatCfg.textChunkLimit,
         chunkMode: chatCfg.chunkMode ?? "newline",
         blockStreaming: chatCfg.blockStreaming ?? false,
@@ -99,6 +103,15 @@ export function resolve43ChatAccount({
     sseReconnectDelayMs: accountCfg?.sseReconnectDelayMs ?? chatCfg?.sseReconnectDelayMs,
     sseMaxReconnectDelayMs:
       accountCfg?.sseMaxReconnectDelayMs ?? chatCfg?.sseMaxReconnectDelayMs,
+    promptGroupContextEnabled:
+      accountCfg?.promptGroupContextEnabled ?? chatCfg?.promptGroupContextEnabled,
+    promptGroupContextApiPath:
+      readOptionalNonBlankString(accountCfg?.promptGroupContextApiPath)
+      ?? readOptionalNonBlankString(chatCfg?.promptGroupContextApiPath),
+    promptGroupContextRefreshMs:
+      accountCfg?.promptGroupContextRefreshMs ?? chatCfg?.promptGroupContextRefreshMs,
+    promptGroupContextMaxItems:
+      accountCfg?.promptGroupContextMaxItems ?? chatCfg?.promptGroupContextMaxItems,
     textChunkLimit: accountCfg?.textChunkLimit ?? chatCfg?.textChunkLimit,
     chunkMode: accountCfg?.chunkMode ?? chatCfg?.chunkMode ?? "newline",
     blockStreaming: accountCfg?.blockStreaming ?? chatCfg?.blockStreaming ?? false,

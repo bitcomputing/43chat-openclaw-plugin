@@ -9,6 +9,7 @@ import { chat43Outbound } from "./outbound.js";
 import { probe43ChatAccount } from "./client.js";
 import { looksLike43ChatId, normalize43ChatTarget } from "./targets.js";
 import { sendMessage43Chat } from "./send.js";
+import { getPromptGroupContextHints } from "./prompt-group-context.js";
 import packageJson from "../package.json" with { type: "json" };
 
 const DEFAULT_ACCOUNT_ID = "default";
@@ -52,14 +53,22 @@ export const chat43Plugin: ChannelPlugin<Resolved43ChatAccount> = {
   },
 
   agentPrompt: {
-    messageToolHints: () => [
-      "- 🚨 核心规则：只发送最终回复内容到 43Chat",
-      "- 回复 43Chat 消息时流程：1. 内部静默查看历史记录 2. 分析和思考 3. 只发送一次最终回复",
-      "- ❌ 严禁发送：思考过程、内部信号、系统错误、调试/日志、指令输出、非人类内容、无意义标记",
-      "- ✅ 只发送：最终人类可读回复，一次性发送",
-      '- 发送前自查："这是人类会说的话吗？" 直接回复，无多余说明或标记。',
-      "- 43Chat 目标说明：省略 `target` 表示回复当前会话；显式目标格式为 `user:<id>` 或 `group:<id>`。",
-    ],
+    messageToolHints: ({ cfg, accountId }) => {
+      const resolvedAccount = resolve43ChatAccount({ cfg, accountId: accountId ?? DEFAULT_ACCOUNT_ID });
+      const groupContextHints = getPromptGroupContextHints(
+        resolvedAccount.accountId,
+        resolvedAccount.config.promptGroupContextMaxItems ?? 8,
+      );
+      return [
+        "- 🚨 核心规则：只发送最终回复内容到 43Chat",
+        "- 回复 43Chat 消息时流程：1. 内部静默查看历史记录 2. 分析和思考 3. 只发送一次最终回复",
+        "- ❌ 严禁发送：思考过程、内部信号、系统错误、调试/日志、指令输出、非人类内容、无意义标记",
+        "- ✅ 只发送：最终人类可读回复，一次性发送",
+        '- 发送前自查："这是人类会说的话吗？" 直接回复，无多余说明或标记。',
+        "- 43Chat 目标说明：省略 `target` 表示回复当前会话；显式目标格式为 `user:<id>` 或 `group:<id>`。",
+        ...groupContextHints,
+      ];
+    },
   },
 
   reload: { configPrefixes: ["channels.43chat-openclaw-plugin"] },
@@ -99,6 +108,26 @@ export const chat43Plugin: ChannelPlugin<Resolved43ChatAccount> = {
           minimum: 1000,
           title: "SSE最大重连延迟(ms)",
         },
+        promptGroupContextEnabled: {
+          type: "boolean",
+          default: false,
+          title: "启用群组身份Prompt上下文",
+        },
+        promptGroupContextApiPath: {
+          type: "string",
+          default: "/open/agent/groups",
+          title: "群组身份拉取API路径",
+        },
+        promptGroupContextRefreshMs: {
+          type: "integer",
+          minimum: 5000,
+          title: "群组身份刷新间隔(ms)",
+        },
+        promptGroupContextMaxItems: {
+          type: "integer",
+          minimum: 1,
+          title: "Prompt中最多注入群组条数",
+        },
         textChunkLimit: {
           type: "integer",
           minimum: 1,
@@ -127,6 +156,26 @@ export const chat43Plugin: ChannelPlugin<Resolved43ChatAccount> = {
               requestTimeoutMs: { type: "integer", minimum: 1000, title: "请求超时(ms)" },
               sseReconnectDelayMs: { type: "integer", minimum: 100, title: "SSE重连起始延迟(ms)" },
               sseMaxReconnectDelayMs: { type: "integer", minimum: 1000, title: "SSE最大重连延迟(ms)" },
+              promptGroupContextEnabled: {
+                type: "boolean",
+                default: false,
+                title: "启用群组身份Prompt上下文",
+              },
+              promptGroupContextApiPath: {
+                type: "string",
+                default: "/open/agent/groups",
+                title: "群组身份拉取API路径",
+              },
+              promptGroupContextRefreshMs: {
+                type: "integer",
+                minimum: 5000,
+                title: "群组身份刷新间隔(ms)",
+              },
+              promptGroupContextMaxItems: {
+                type: "integer",
+                minimum: 1,
+                title: "Prompt中最多注入群组条数",
+              },
               textChunkLimit: { type: "integer", minimum: 1, title: "文本分片限制" },
               chunkMode: {
                 type: "string",
