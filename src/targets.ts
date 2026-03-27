@@ -1,4 +1,5 @@
 export type Chat43TargetKind = "user" | "group";
+import packageJson from "../package.json" with { type: "json" };
 
 export type Parsed43ChatTarget = {
   kind: Chat43TargetKind;
@@ -7,7 +8,7 @@ export type Parsed43ChatTarget = {
 };
 
 function stripChannelPrefix(raw: string): string {
-  return raw.replace(/^43chat:/i, "");
+  return raw.replace(new RegExp(`^${packageJson.openclaw.channel.id}\\s*:\\s*`, "i"), "");
 }
 
 export function parse43ChatTarget(raw: string): Parsed43ChatTarget | null {
@@ -54,5 +55,5 @@ export function to43ChatAddress(raw: string): string | null {
   if (!normalized) {
     return null;
   }
-  return `43chat:${normalized}`;
+  return `${packageJson.openclaw.channel.id}:${normalized}`;
 }

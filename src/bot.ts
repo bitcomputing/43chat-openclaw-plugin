@@ -14,6 +14,7 @@ import type {
   Chat43PrivateMessageEventData,
   Chat43SystemNoticeEventData,
 } from "./types.js";
+import packageJson from "../package.json" with { type: "json" };
 
 type InboundDescriptor = {
   dedupeKey: string;
@@ -31,6 +32,7 @@ type InboundDescriptor = {
 
 const processedEvents = new Map<string, number>();
 const MAX_PROCESSED_EVENTS = 2048;
+const CHANNEL_ID = packageJson.openclaw.channel.id;
 
 function rememberProcessedEvent(key: string): boolean {
   if (processedEvents.has(key)) {
@@ -116,7 +118,7 @@ function buildInboundDescriptor(event: Chat43AnySSEEvent): InboundDescriptor | n
         messageId,
         chatType: "direct",
         target: `user:${senderId}`,
-        fromAddress: `43chat:user:${senderId}`,
+        fromAddress: `${CHANNEL_ID}:user:${senderId}`,
         senderId,
         senderName: senderId,
         text,
@@ -159,7 +161,7 @@ function buildInboundDescriptor(event: Chat43AnySSEEvent): InboundDescriptor | n
         messageId,
         chatType: "group",
         target: `group:${groupId}`,
-        fromAddress: `43chat:group:${groupId}`,
+        fromAddress: `${CHANNEL_ID}:group:${groupId}`,
         senderId,
         senderName: senderId,
         text,
@@ -176,7 +178,7 @@ function buildInboundDescriptor(event: Chat43AnySSEEvent): InboundDescriptor | n
         messageId,
         chatType: "direct",
         target: `user:${senderId}`,
-        fromAddress: `43chat:user:${senderId}`,
+        fromAddress: `${CHANNEL_ID}:user:${senderId}`,
         senderId,
         senderName: data.from_nickname || senderId,
         text: `[43Chat好友请求] 用户 ${senderId}${data.from_nickname ? `(${data.from_nickname})` : ""} 请求添加好友，附言：${data.request_msg || "无"}，request_id=${data.request_id}`,
@@ -192,7 +194,7 @@ function buildInboundDescriptor(event: Chat43AnySSEEvent): InboundDescriptor | n
         messageId,
         chatType: "direct",
         target: `user:${senderId}`,
-        fromAddress: `43chat:user:${senderId}`,
+        fromAddress: `${CHANNEL_ID}:user:${senderId}`,
         senderId,
         senderName: data.from_nickname || senderId,
         text: `[43Chat好友通过] 用户 ${senderId}${data.from_nickname ? `(${data.from_nickname})` : ""} 已通过好友请求，request_id=${data.request_id}`,
@@ -209,7 +211,7 @@ function buildInboundDescriptor(event: Chat43AnySSEEvent): InboundDescriptor | n
         messageId,
         chatType: "group",
         target: `group:${groupId}`,
-        fromAddress: `43chat:group:${groupId}`,
+        fromAddress: `${CHANNEL_ID}:group:${groupId}`,
         senderId: inviterId,
         senderName: data.inviter_name || inviterId,
         text: `[43Chat群通知] 你收到群组邀请/入群申请通知，group_id=${groupId}，group_name=${data.group_name || "未知群"}，inviter=${data.inviter_name || inviterId}(${inviterId})，message=${data.invite_msg || "无"}，invitation_id=${data.invitation_id}`,
@@ -227,7 +229,7 @@ function buildInboundDescriptor(event: Chat43AnySSEEvent): InboundDescriptor | n
         messageId,
         chatType: "group",
         target: `group:${groupId}`,
-        fromAddress: `43chat:group:${groupId}`,
+        fromAddress: `${CHANNEL_ID}:group:${groupId}`,
         senderId: userId,
         senderName: data.nickname || userId,
         text: `[43Chat群通知] 新成员入群，group_id=${groupId}，group_name=${data.group_name || "未知群"}，user_id=${userId}，nickname=${data.nickname || userId}，join_method=${data.join_method || "unknown"}`,
@@ -243,7 +245,7 @@ function buildInboundDescriptor(event: Chat43AnySSEEvent): InboundDescriptor | n
         messageId,
         chatType: "direct",
         target: "user:0",
-        fromAddress: "43chat:user:0",
+        fromAddress: `${CHANNEL_ID}:user:0`,
         senderId: "0",
         senderName: "system",
         text: `[43Chat系统通知][${data.level || "info"}] ${data.title || "系统通知"}: ${data.content || ""}`.trim(),
@@ -314,7 +316,7 @@ export async function handle43ChatEvent(
   const core = get43ChatRuntime();
   const route = core.channel.routing.resolveAgentRoute({
     cfg,
-    channel: "43chat-openclaw-plugin",
+    channel: CHANNEL_ID,
     accountId,
     peer: {
       kind: inbound.chatType === "group" ? "group" : "direct",
@@ -332,11 +334,11 @@ export async function handle43ChatEvent(
   const preview = "";
   core.system.enqueueSystemEvent(`43Chat[${accountId}] ${inbound.chatType} ${inbound.target}: ${preview}`, {
     sessionKey: route.sessionKey,
-    contextKey: `43chat:${inbound.messageId}`,
+    contextKey: `${CHANNEL_ID}:${inbound.messageId}`,
   });
 
   const body = core.channel.reply.formatInboundEnvelope({
-    channel: "43Chat-openclaw-plugin",  
+    channel: CHANNEL_ID,
     from: inbound.conversationLabel,
     body: inbound.text,
     timestamp: inbound.timestamp,
@@ -362,21 +364,21 @@ export async function handle43ChatEvent(
     GroupSubject: inbound.groupSubject,
     SenderName: inbound.senderName,
     SenderId: inbound.senderId,
-    Provider: "43chat" as const,
-    Surface: "43chat" as const,
+    Provider: CHANNEL_ID,
+    Surface: CHANNEL_ID,
     MessageSid: inbound.messageId,
     Timestamp: inbound.timestamp,
     WasMentioned: true,
     CommandAuthorized: true,
-    OriginatingChannel: "43chat-openclaw-plugin" as const,
+    OriginatingChannel: CHANNEL_ID,
     OriginatingTo: inbound.target,
   });
 
-  const textChunkLimit = core.channel.text.resolveTextChunkLimit(cfg, "43chat", accountId, {
+  const textChunkLimit = core.channel.text.resolveTextChunkLimit(cfg, CHANNEL_ID, accountId, {
     fallbackLimit: account.config.textChunkLimit ?? 1800,
   });
   const chunkMode = account.config.chunkMode
-    ?? core.channel.text.resolveChunkMode(cfg, "43chat", accountId);
+    ?? core.channel.text.resolveChunkMode(cfg, CHANNEL_ID, accountId);
 
   const sendReply = async (text: string): Promise<void> => {
     log(`43chat[${accountId}]: send reply ${text}`);

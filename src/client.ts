@@ -1,4 +1,5 @@
 import type { Resolved43ChatAccount, Chat43AgentProfile, Chat43OpenApiResponse, Chat43Probe, Chat43SendResult } from "./types.js";
+import packageJson from "../package.json" with { type: "json" };
 
 export type ParsedSSEFrame = {
   id?: string;
@@ -382,7 +383,7 @@ export function create43ChatClient(account: Resolved43ChatAccount) {
     });
 
     return {
-      messageId: response.data?.message_id ?? `43chat_${Date.now()}`,
+      messageId: response.data?.message_id ?? `${packageJson.openclaw.channel.id}_${Date.now()}`,
       chatId: `${params.targetType}:${params.targetId}`,
       targetType: params.targetType,
     };

@@ -1,6 +1,7 @@
 import type { ChannelOutboundAdapter, ChannelOutboundContext, ReplyPayload } from "openclaw/plugin-sdk";
 import { sendMessage43Chat } from "./send.js";
 import { log } from "node:console";
+import packageJson from "../package.json" with { type: "json" };
 
 function chunkText(text: string, limit: number): string[] {
   if (text.length <= limit) {
@@ -30,7 +31,7 @@ export const chat43Outbound: ChannelOutboundAdapter = {
     });
     log(`43chat[${ctx.accountId}]: send text result ${result.messageId} ${result.chatId}`);
     return {
-      channel: "43chat-openclaw-plugin" as const,
+      channel: packageJson.openclaw.channel.id,
       messageId: result.messageId,
       chatId: result.chatId,
     };
@@ -47,7 +48,7 @@ export const chat43Outbound: ChannelOutboundAdapter = {
     });
     log(`43chat[${ctx.accountId}]: send payload result ${result.messageId} ${result.chatId}`);
     return {
-      channel: "43chat-openclaw-plugin" as const,
+      channel: packageJson.openclaw.channel.id,
       messageId: result.messageId,
       chatId: result.chatId,
     };

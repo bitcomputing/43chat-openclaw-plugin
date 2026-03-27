@@ -3,6 +3,7 @@ import type { Chat43Config, Resolved43ChatAccount } from "./types.js";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import packageJson from "../package.json" with { type: "json" };
 
 const DEFAULT_ACCOUNT_ID = "default";
 
@@ -31,7 +32,7 @@ export function resolve43ChatAccount({
   cfg: ClawdbotConfig;
   accountId?: string;
 }): Resolved43ChatAccount {
-  const chatCfg = cfg.channels?.["43chat-openclaw-plugin"] as Chat43Config | undefined;
+  const chatCfg = cfg.channels?.[packageJson.openclaw.channel.id] as Chat43Config | undefined;
   const isDefault = accountId === DEFAULT_ACCOUNT_ID;
 
 
@@ -131,7 +132,7 @@ export function resolve43ChatAccount({
 }
 
 export function list43ChatAccountIds(cfg: ClawdbotConfig): string[] {
-  const chatCfg = cfg.channels?.["43chat-openclaw-plugin"] as Chat43Config | undefined;
+  const chatCfg = cfg.channels?.[packageJson.openclaw.channel.id] as Chat43Config | undefined;
   const ids = [DEFAULT_ACCOUNT_ID];
   if (chatCfg?.accounts) {
     ids.push(...Object.keys(chatCfg.accounts));

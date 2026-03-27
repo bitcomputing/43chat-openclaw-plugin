@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { looksLike43ChatId, normalize43ChatTarget, parse43ChatTarget, to43ChatAddress } from "../targets.js";
+import packageJson from "../../package.json" with { type: "json" };
 
 describe("43Chat target parsing", () => {
   it("parses user targets", () => {
@@ -11,8 +12,8 @@ describe("43Chat target parsing", () => {
   });
 
   it("parses group targets with channel prefix", () => {
-    expect(normalize43ChatTarget("43chat:group:456")).toBe("group:456");
-    expect(to43ChatAddress("group:456")).toBe("43chat:group:456");
+    expect(normalize43ChatTarget(`${packageJson.openclaw.channel.id}:group:456`)).toBe("group:456");
+    expect(to43ChatAddress("group:456")).toBe(`${packageJson.openclaw.channel.id}:group:456`);
   });
 
   it("treats bare numeric targets as users", () => {

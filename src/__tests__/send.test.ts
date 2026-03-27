@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { sendMessage43Chat } from "../send.js";
+import packageJson from "../../package.json" with { type: "json" };
 
 describe("sendMessage43Chat", () => {
   afterEach(() => {
@@ -23,7 +24,7 @@ describe("sendMessage43Chat", () => {
     const result = await sendMessage43Chat({
       cfg: {
         channels: {
-          ["43chat"]: {
+          [packageJson.openclaw.channel.id]: {
             baseUrl: "https://example.com",
             apiKey: "sk-test",
           },

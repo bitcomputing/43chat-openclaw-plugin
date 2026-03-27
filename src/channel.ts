@@ -17,12 +17,12 @@ const PAIRING_APPROVED_MESSAGE = "✓ You have been approved to chat with this a
 
 const meta = {
   id: packageJson.openclaw.channel.id,
-  label: "43Chat",
-  selectionLabel: "43Chat",
-  docsPath: "/channels/43chat",
-  docsLabel: "43chat",
-  blurb: "43Chat OpenAPI + SSE channel.",
-  order: 85,
+  label: packageJson.openclaw.channel.label,
+  selectionLabel: packageJson.openclaw.channel.selectionLabel,
+  docsPath: packageJson.openclaw.channel.docsPath,
+  docsLabel: packageJson.openclaw.channel.docsLabel,
+  blurb: packageJson.openclaw.channel.blurb,
+  order: packageJson.openclaw.channel.order,
   version: packageJson.version,
 };
 
@@ -32,7 +32,7 @@ export const chat43Plugin: ChannelPlugin<Resolved43ChatAccount> = {
 
   pairing: {
     idLabel: "chat43Id",
-    normalizeAllowEntry: (entry: string) => entry.replace(/^43chat:/i, ""),
+    normalizeAllowEntry: (entry: string) => entry.replace(new RegExp(`^${packageJson.openclaw.channel.id}\\s*:\\s*`, "i"), ""),
     notifyApproval: async ({ cfg, id }) => {
       await sendMessage43Chat({
         cfg,
@@ -71,7 +71,7 @@ export const chat43Plugin: ChannelPlugin<Resolved43ChatAccount> = {
     },
   },
 
-  reload: { configPrefixes: ["channels.43chat-openclaw-plugin"] },
+  reload: { configPrefixes: [`channels.${packageJson.openclaw.channel.id}`] },
 
   configSchema: { 
     schema: {
@@ -218,20 +218,20 @@ export const chat43Plugin: ChannelPlugin<Resolved43ChatAccount> = {
           ...cfg,
           channels: {
             ...cfg.channels,
-            ["43chat-openclaw-plugin"]: {
-              ...(cfg.channels?.["43chat-openclaw-plugin"] as Record<string, unknown> | undefined),
+            [packageJson.openclaw.channel.id]: {
+              ...(cfg.channels?.[packageJson.openclaw.channel.id] as Record<string, unknown> | undefined),
               enabled,
             },
           },
         };
       }
 
-      const chatCfg = cfg.channels?.["43chat-openclaw-plugin"] as Chat43Config | undefined;
+      const chatCfg = cfg.channels?.[packageJson.openclaw.channel.id] as Chat43Config | undefined;
       return {
         ...cfg,
         channels: {
           ...cfg.channels,
-          ["43chat-openclaw-plugin"]: {
+          [packageJson.openclaw.channel.id]: {
             ...chatCfg,
             accounts: {
               ...chatCfg?.accounts,
@@ -254,7 +254,7 @@ export const chat43Plugin: ChannelPlugin<Resolved43ChatAccount> = {
       if (accountId === DEFAULT_ACCOUNT_ID) {
         const next = { ...cfg } as ClawdbotConfig;
         const nextChannels = { ...cfg.channels };
-        delete (nextChannels as Record<string, unknown>)["43chat-openclaw-plugin"];
+        delete (nextChannels as Record<string, unknown>)[packageJson.openclaw.channel.id];
         if (Object.keys(nextChannels).length > 0) {
           next.channels = nextChannels;
         } else {
@@ -263,14 +263,14 @@ export const chat43Plugin: ChannelPlugin<Resolved43ChatAccount> = {
         return next;
       }
 
-      const chatCfg = cfg.channels?.["43chat-openclaw-plugin"] as Chat43Config | undefined;
+      const chatCfg = cfg.channels?.[packageJson.openclaw.channel.id] as Chat43Config | undefined;
       const accounts = { ...chatCfg?.accounts };
       delete accounts[accountId];
       return {
         ...cfg,
         channels: {
           ...cfg.channels,
-          ["43chat-openclaw-plugin"]: {
+          [packageJson.openclaw.channel.id]: {
             ...chatCfg,
             accounts: Object.keys(accounts).length > 0 ? accounts : undefined,
           },
@@ -322,20 +322,20 @@ export const chat43Plugin: ChannelPlugin<Resolved43ChatAccount> = {
           ...cfg,
           channels: {
             ...cfg.channels,
-            ["43chat-openclaw-plugin"]: {
-              ...(cfg.channels?.["43chat-openclaw-plugin"] as Record<string, unknown> | undefined),
+            [packageJson.openclaw.channel.id]: {
+              ...(cfg.channels?.[packageJson.openclaw.channel.id] as Record<string, unknown> | undefined),
               enabled: true,
             },
           },
         };
       }
 
-      const chatCfg = cfg.channels?.["43chat-openclaw-plugin"] as Chat43Config | undefined;
+      const chatCfg = cfg.channels?.[packageJson.openclaw.channel.id] as Chat43Config | undefined;
       return {
         ...cfg,
         channels: {
           ...cfg.channels,
-          ["43chat-openclaw-plugin"]: {
+          [packageJson.openclaw.channel.id]: {
             ...chatCfg,
             accounts: {
               ...chatCfg?.accounts,
