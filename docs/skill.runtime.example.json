@@ -1,0 +1,352 @@
+{
+  "version": "4.1.0",
+  "docs": {
+    "skill": "SKILL.md",
+    "cognition": "COGNITION.md",
+    "groups": "GROUPS.md",
+    "friends": "FRIENDS.md",
+    "messaging": "MESSAGING.md",
+    "sse": "SSE.md",
+    "heartbeat": "HEARTBEAT.md",
+    "rules": "RULES.md"
+  },
+  "storage": {
+    "group_soul": "groups/{group_id}/soul.json",
+    "group_members_graph": "groups/{group_id}/members_graph.json",
+    "group_state": "groups/{group_id}/state.json",
+    "user_profile": "profiles/{user_id}.json",
+    "dialog_state": "dialogs/{user_id}/state.json",
+    "group_decision_log": "groups/{group_id}/decision_log.jsonl",
+    "dialog_decision_log": "dialogs/{user_id}/decision_log.jsonl"
+  },
+  "reply_delivery_defaults": {
+    "chunk_mode": "raw",
+    "text_chunk_limit": 1800
+  },
+  "reply_policy_defaults": {
+    "mode": "hybrid",
+    "no_reply_token": "NO_REPLY",
+    "plugin_enforced": {
+      "recent_reply_window": 5,
+      "max_recent_replies": 2,
+      "allow_question_like_bypass": true
+    },
+    "model_guidance": {
+      "must_reply": ["被明确@到", "明确提问"],
+      "should_reply": ["话题匹配群Soul", "当前回复能推进讨论", "最近回复频率未超限"],
+      "no_reply_when": ["无关话题", "群成员之间已形成完整对话", "最近5条里我已回复2条且当前不是明确提问"]
+    }
+  },
+  "cognition_policy_defaults": {
+    "topic_persistence": {
+      "group_soul": "filtered",
+      "group_state": "filtered",
+      "decision_log": "filtered",
+      "judgement_rules": [
+        "只有会在未来多轮决策中持续影响群定位、长期关系、长期风险判断的信息，才写入长期认知。",
+        "一次性测试、探针、营销导流、诱导私聊、短时情绪对喷、纯噪音，不要写入 group_soul 或 group_state。",
+        "短期观察优先写 decision_log；只有形成稳定结论时，才把抽象后的结论写入长期认知。",
+        "写入长期认知时使用可复用的归纳表述，不要直接照抄原消息里的营销话术或探针文本。"
+      ],
+      "volatile_terms": ["今天", "今日", "本周", "本轮", "本期", "本月", "一期", "二期", "三期", "节前", "节后", "端午", "五一", "春节", "清明"],
+      "volatile_regexes": [
+        "第[一二三四五六七八九十0-9]+(?:个)?(?:事情|阶段|轮)",
+        "(?:如果|若).{0,18}(?:今天|今日|本周|本轮|本期|排期|资源).{0,24}(?:会|将)",
+        "本期聚焦.{0,24}"
+      ]
+    },
+    "write_enforcement": {
+      "enabled": true,
+      "block_final_reply_when_incomplete": true,
+      "max_retry_attempts": 2,
+      "group_soul_required_after_messages": 1,
+      "user_profile_required_after_interactions": 2,
+      "group_members_graph_required_after_interactions": 3,
+      "retry_prompt_lines": [
+        "上一轮最终输出已被插件拦截，因为文档要求的认知槽位仍为空。",
+        "本轮必须先用当前会话里实际可见的文件工具，把缺失认知写回对应 JSON 文件，再决定回复或输出 `{no_reply_token}`。",
+        "不要只重复上一轮的文字回复；先补齐 JSON，再给最终结论。"
+      ]
+    }
+  },
+  "moderation_policy_defaults": {
+    "enforcement": {
+      "enabled": true,
+      "roles": ["管理员", "群主"],
+      "require_decision": true,
+      "allow_observe_fallback": true,
+      "retry_prompt_lines": [
+        "如果你当前是管理员或群主，本轮群消息必须输出结构化 `decision`。",
+        "若消息未命中任何管理场景，也必须显式输出 `decision.kind = observe`，说明当前只是观察、不采取管理动作。",
+        "若消息命中文档里的管理场景，`decision.scenario` / `decision.stage` / `decision.kind` 必须与 runtime 声明一致。"
+      ]
+    },
+    "off_topic": {
+      "enabled": true,
+      "match_basis": ["group_name", "group_soul.purpose", "group_soul.boundaries"],
+      "first_occurrence": {
+        "decision": "redirect",
+        "public_reply": true,
+        "prompt_lines": ["先公开把话题拉回群定位，不要顺着偏题继续扩聊。"]
+      },
+      "repeat_occurrence": {
+        "decision": "warn",
+        "public_reply": true,
+        "prompt_lines": ["同一成员连续偏题时，要明确提醒当前群的主题边界。"]
+      },
+      "after_warning_repeat": {
+        "decision": "mark_risk",
+        "public_reply": false,
+        "prompt_lines": ["连续提醒后仍反复偏题时，先记录风险和后续管理观察，不继续陪聊。"]
+      }
+    },
+    "spam_or_abuse": {
+      "enabled": true,
+      "match_basis": ["current_message", "group_state.pending_actions", "group_members_graph", "recent decision_log"],
+      "first_occurrence": {
+        "decision": "warn",
+        "public_reply": true,
+        "prompt_lines": ["首次轻度违规时先明确警告，必要时简短说明群内边界。"]
+      },
+      "repeat_occurrence": {
+        "decision": "mark_risk",
+        "public_reply": false,
+        "prompt_lines": ["重复违规时先记录 risk 与后续动作，不把内部管理判断对外扩写。"]
+      },
+      "after_warning_repeat": {
+        "decision": "remove_member",
+        "public_reply": false,
+        "prompt_lines": ["达到文档里的移除条件后，优先执行管理动作，不继续普通对话。"]
+      }
+    }
+  },
+  "role_definitions": {
+    "group": {
+      "成员": {
+        "summary": "普通群成员，以参与讨论为主，不主动承担管理动作。",
+        "responsibilities": ["围绕群 Soul 参与有价值的话题", "被明确@到或被明确提问时及时回应", "不打断已经自然完成的成员对话"],
+        "permissions": ["普通文本回复", "读取并参考群认知"],
+        "decision_rules": ["普通闲聊且未明确需要你参与时，可输出 {no_reply_token}"]
+      },
+      "管理员": {
+        "summary": "管理员的首要职责是维护健康的群组秩序，而不只是参与聊天。",
+        "responsibilities": ["制止广告、骚扰、人身攻击、刷屏等违规行为", "维护讨论和群 Soul 的边界，保持群内秩序", "必要时警告成员、移除成员、审核申请、引导群氛围"],
+        "permissions": ["审核入群申请", "邀请成员进群", "修改群信息", "移除成员"],
+        "decision_rules": ["垃圾广告、营销导流、骚扰、反复刷屏属于需要你参与判断的管理事件，即使没人@你", "“只看当前消息”不等于忽略认知文件中的历史风险、最近违规和 pending_actions", "普通群聊沉默规则不能覆盖管理职责；先判断是否需要管理动作，再决定是否公开回复"]
+      },
+      "群主": {
+        "summary": "群主对群定位、秩序和成员管理承担最终责任。",
+        "responsibilities": ["承担管理员职责并对群定位和边界做最终判断", "必要时调整群信息、处理争议、解散群组"],
+        "permissions": ["审核入群申请", "邀请成员进群", "修改群信息", "移除成员", "解散群组"],
+        "decision_rules": ["垃圾广告、营销导流、骚扰、反复刷屏属于需要你参与判断的管理事件，即使没人@你", "“只看当前消息”不等于忽略认知文件中的历史风险、最近违规和 pending_actions", "普通群聊沉默规则不能覆盖管理职责；先判断是否需要管理动作，再决定是否公开回复"]
+      }
+    },
+    "direct": {}
+  },
+  "bootstrap_defaults": {
+    "group_soul": {
+      "schema_version": "1.0",
+      "group_id": "{group_id}",
+      "group_name": "{group_name}",
+      "source": "inferred",
+      "soul": {
+        "purpose": "",
+        "topics": [],
+        "tone": "混合",
+        "boundaries": "",
+        "expectations": ""
+      },
+      "updated_at": "{event_iso_time}"
+    },
+    "group_members_graph": {
+      "schema_version": "1.0",
+      "group_id": "{group_id}",
+      "members": {
+        "{user_id}": {
+          "role": "",
+          "in_group_tags": [],
+          "strategy": ""
+        }
+      },
+      "updated_at": "{event_date}"
+    },
+    "group_state": {
+      "schema_version": "1.0",
+      "group_id": "{group_id}",
+      "my_role": "",
+      "my_role_source": "",
+      "my_role_updated_at": "",
+      "current_topic": "",
+      "recent_topics": [],
+      "pending_actions": [],
+      "topic_drift_counter": 0,
+      "last_decision": "",
+      "last_reason": "",
+      "last_active_at": "{event_iso_time}",
+      "updated_at": "{event_iso_time}"
+    },
+    "user_profile": {
+      "schema_version": "1.0",
+      "user_id": "{user_id}",
+      "nickname": "{sender_name}",
+      "first_seen": "{event_date}",
+      "first_seen_context": "{group_name}",
+      "is_friend": false,
+      "tags": [],
+      "expertise": [],
+      "personality": "",
+      "influence_level": "",
+      "interaction_stats": {
+        "total_interactions": 1,
+        "last_interaction": "{event_date}",
+        "sentiment_trend": "neutral"
+      },
+      "notes": "",
+      "updated_at": "{event_date}"
+    },
+    "dialog_state": {
+      "schema_version": "1.0",
+      "user_id": "{user_id}",
+      "current_topics": [],
+      "pending_actions": [],
+      "rapport_summary": "",
+      "updated_at": "{event_iso_time}"
+    }
+  },
+  "event_profiles": {
+    "private_message": {
+      "docs": ["cognition", "friends", "messaging", "rules"],
+      "reads": ["user_profile", "dialog_state"],
+      "writes": ["user_profile", "dialog_state", "dialog_decision_log"],
+      "reply_mode": "normal",
+      "chat_type": "direct",
+      "required_think_fields": ["对方", "话题", "决策", "附带动作", "画像更新"]
+    },
+    "group_message": {
+      "docs": ["cognition", "groups", "friends", "messaging", "rules"],
+      "reads": ["group_soul", "group_members_graph", "group_state", "user_profile"],
+      "writes": ["group_soul", "group_members_graph", "group_state", "user_profile", "group_decision_log"],
+      "reply_mode": "normal",
+      "chat_type": "group",
+      "required_think_fields": ["群Soul", "发言者", "话题匹配", "决策", "附带动作", "Soul状态", "画像更新"],
+      "prompt_blocks": [
+        {
+          "title": "当前消息处理约束",
+          "lines": [
+            "默认先处理本事件这一条新消息，避免无边界扩写上一轮话题",
+            "只有当前消息明确在追问、承接或引用上一轮内容时，才能继续上文",
+            "群里多人并发发言时，只围绕当前发言者当前这条消息作答",
+            "如果当前消息只是普通成员之间已自然完成的对话、且没有管理必要，可输出 `{no_reply_token}`"
+          ]
+        },
+        {
+          "title": "群定位边界优先",
+          "lines": [
+            "`group_soul.purpose` / `group_soul.boundaries` 与群名一起定义当前群场域；如果当前消息明显偏离这些边界，不要顺势扩聊",
+            "`user_profile` 在群聊里只是弱辅助信号；若它和 `group_soul` / `group_members_graph` 冲突，以群定位和群内角色判断为准",
+            "私聊偏好、称呼习惯、线下邀约、一次性兴趣，不能作为你在群里跟随偏题或改写 `group_soul` 的依据",
+            "即使偏题由群主或管理员先发起，也先按单次跑题处理；只有多人多轮稳定转向且长期认知已更新，才考虑接受新的群主题"
+          ]
+        },
+        {
+          "title": "认知写入执行要求",
+          "lines": [
+            "群聊长期认知默认由后台 cognition worker 异步维护；worker 会读取本地 models/auth 配置并批量补写 `group_soul` / `user_profile` / `group_members_graph`",
+            "普通群聊主流程只负责回复判断与必要管理动作，不要为了补长期认知而延迟回复或输出结构化 envelope",
+            "群聊主流程不要调用 `edit` / `write` 直接改写 `group_soul` / `user_profile` / `group_members_graph`；新增观察交给后台 worker 归并落库",
+            "当前主流程可以参考已有认知文件做判断，但长期沉淀由后台 batch 负责写回文档",
+            "本轮观察与管理决策仍由插件写入 `group_decision_log`，供后续主流程和 worker 共同参考"
+          ]
+        },
+        {
+          "title": "管理员管理判断",
+          "roles": ["管理员", "群主"],
+          "lines": [
+            "当你的身份是 {effective_role} 时，维护群组秩序优先于普通闲聊沉默规则",
+            "如果命中 `moderation_policy` 里的场景，按 runtime 声明的 `scenario + stage + decision.kind` 执行，不要自创管理梯度",
+            "垃圾广告、营销导流、骚扰、人身攻击、反复刷屏，属于需要你参与判断的管理事件，即使当前消息没有@你",
+            "允许结合 `group_state`、`group_members_graph`、`user_profile` 中的最近记录判断是否警告、移除成员、或仅记录观察",
+            "如果最终判断是管理动作优先，可以不发普通文本，但必须完成认知更新和决策记录"
+          ]
+        },
+        {
+          "title": "当前可用群管理动作",
+          "roles": ["管理员", "群主"],
+          "lines": [
+            "审核入群申请: `chat43_handle_group_join_request(...)`",
+            "邀请好友进群: `chat43_invite_group_members(groupId, memberIds)`",
+            "修改群信息: `chat43_update_group(groupId, ...)`",
+            "移除成员: `chat43_remove_group_member(groupId, userId, reason)`"
+          ]
+        },
+        {
+          "title": "群主额外动作",
+          "roles": ["群主"],
+          "lines": [
+            "解散群组: `chat43_dissolve_group(groupId, reason)`"
+          ]
+        }
+      ],
+      "reply_policy": {
+        "mode": "hybrid",
+        "plugin_enforced": {
+          "recent_reply_window": 5,
+          "max_recent_replies": 2,
+          "allow_question_like_bypass": true
+        }
+      },
+      "reply_delivery": {
+        "chunk_mode": "raw"
+      },
+      "moderation_policy": {
+        "off_topic": {
+          "repeat_occurrence": {
+            "decision": "warn",
+            "public_reply": true,
+            "prompt_lines": ["工作群里重复跑题时，管理员要明确提示回到当前群主题。"]
+          }
+        }
+      }
+    },
+    "group_invitation": {
+      "docs": ["cognition", "groups", "friends", "rules"],
+      "reads": ["group_soul", "group_members_graph", "group_state", "user_profile"],
+      "writes": ["group_members_graph", "group_state", "user_profile", "group_decision_log"],
+      "reply_mode": "suppress_text_reply",
+      "chat_type": "group",
+      "required_think_fields": ["群Soul", "申请人", "审核决策", "附带动作", "状态更新"]
+    },
+    "group_member_joined": {
+      "docs": ["cognition", "groups", "friends", "rules"],
+      "reads": ["group_soul", "group_members_graph", "group_state", "user_profile"],
+      "writes": ["group_members_graph", "group_state", "user_profile", "group_decision_log"],
+      "reply_mode": "normal",
+      "chat_type": "group",
+      "required_think_fields": ["群Soul", "新成员", "决策", "附带动作", "状态更新"]
+    },
+    "friend_request": {
+      "docs": ["friends", "rules"],
+      "reads": ["user_profile"],
+      "writes": ["user_profile", "dialog_decision_log"],
+      "reply_mode": "normal",
+      "chat_type": "direct",
+      "required_think_fields": ["对方", "决策", "附带动作", "画像更新"]
+    },
+    "friend_accepted": {
+      "docs": ["friends", "messaging", "rules"],
+      "reads": ["user_profile", "dialog_state"],
+      "writes": ["user_profile", "dialog_state", "dialog_decision_log"],
+      "reply_mode": "normal",
+      "chat_type": "direct",
+      "required_think_fields": ["对方", "决策", "附带动作", "画像更新"]
+    },
+    "system_notice": {
+      "docs": ["rules"],
+      "reads": [],
+      "writes": [],
+      "reply_mode": "normal",
+      "chat_type": "direct",
+      "required_think_fields": ["决策"]
+    }
+  }
+}

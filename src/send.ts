@@ -3,6 +3,7 @@ import type { Chat43SendResult } from "./types.js";
 import { resolve43ChatAccount } from "./accounts.js";
 import { create43ChatClient } from "./client.js";
 import { parse43ChatTarget } from "./targets.js";
+import { logInfo, logError } from "./logger.js";
 
 export type Send43ChatMessageParams = {
   cfg: ClawdbotConfig;
@@ -17,19 +18,34 @@ export async function sendMessage43Chat(
   const { cfg, to, text, accountId } = params;
   const account = resolve43ChatAccount({ cfg, accountId });
 
+  logInfo(account.accountId, `sendMessage43Chat: to=${to}, textLength=${text.length}`);
+
   if (!account.configured) {
-    throw new Error(`43Chat account "${account.accountId}" not configured`);
+    const error = `43Chat account "${account.accountId}" not configured`;
+    logError(account.accountId, error);
+    throw new Error(error);
   }
 
   const target = parse43ChatTarget(to);
   if (!target) {
-    throw new Error(`Invalid 43Chat target: ${to}`);
+    const error = `Invalid 43Chat target: ${to}`;
+    logError(account.accountId, error);
+    throw new Error(error);
   }
 
-  const client = create43ChatClient(account);
-  return client.sendText({
-    targetType: target.kind,
-    targetId: target.id,
-    text: text ?? "",
-  });
+  logInfo(account.accountId, `Sending to ${target.kind}:${target.id}`);
+
+  try {
+    const client = create43ChatClient(account);
+    const result = await client.sendText({
+      targetType: target.kind,
+      targetId: target.id,
+      text: text ?? "",
+    });
+    logInfo(account.accountId, `Send success: messageId=${result.messageId}, chatId=${result.chatId}`);
+    return result;
+  } catch (error) {
+    logError(account.accountId, `Send failed to ${target.kind}:${target.id}`, error);
+    throw error;
+  }
 }

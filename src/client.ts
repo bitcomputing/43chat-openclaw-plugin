@@ -1,5 +1,20 @@
-import type { Resolved43ChatAccount, Chat43AgentProfile, Chat43OpenApiResponse, Chat43Probe, Chat43SendResult } from "./types.js";
+import type {
+  Resolved43ChatAccount,
+  Chat43AgentProfile,
+  Chat43GroupJoinRequestAction,
+  Chat43GroupJoinRequestList,
+  Chat43HandleGroupJoinRequestResult,
+  Chat43GroupMemberList,
+  Chat43InviteGroupMembersResult,
+  Chat43UpdateGroupResult,
+  Chat43RemoveGroupMemberResult,
+  Chat43DissolveGroupResult,
+  Chat43OpenApiResponse,
+  Chat43Probe,
+  Chat43SendResult,
+} from "./types.js";
 import packageJson from "../package.json" with { type: "json" };
+import { logInfo, logError } from "./logger.js";
 
 export type ParsedSSEFrame = {
   id?: string;
@@ -179,6 +194,47 @@ type SendTextParams = {
   targetType: "user" | "group";
   targetId: string;
   text: string;
+};
+
+type ListGroupJoinRequestsParams = {
+  groupId: string;
+  status?: "pending" | "approved" | "rejected" | "all";
+};
+
+type HandleGroupJoinRequestParams = {
+  requestId: string;
+  action: Chat43GroupJoinRequestAction;
+  rejectReason?: string;
+};
+
+type ListGroupMembersParams = {
+  groupId: string;
+  pageSize?: number;
+};
+
+type InviteGroupMembersParams = {
+  groupId: string;
+  memberIds: string[];
+};
+
+type UpdateGroupParams = {
+  groupId: string;
+  name?: string;
+  avatar?: string;
+  description?: string;
+  category?: string;
+  joinType?: number;
+};
+
+type RemoveGroupMemberParams = {
+  groupId: string;
+  userId: string;
+  reason?: string;
+};
+
+type DissolveGroupParams = {
+  groupId: string;
+  reason?: string;
 };
 
 export function create43ChatClient(account: Resolved43ChatAccount) {
@@ -377,22 +433,204 @@ export function create43ChatClient(account: Resolved43ChatAccount) {
           msg_type: "text",
         };
 
-    const response = await requestJson<{ message_id: string; sent_at: number }>(path, {
-      method: "POST",
-      body: JSON.stringify(body),
+    logInfo(account.accountId, `API request: POST ${path}, body=${JSON.stringify(body)}`);
+
+    try {
+      const response = await requestJson<{ message_id: string; sent_at: number }>(path, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+
+      logInfo(account.accountId, `API response: code=${response.code}, message_id=${response.data?.message_id}`);
+
+      return {
+        messageId: response.data?.message_id ?? `${packageJson.openclaw.channel.id}_${Date.now()}`,
+        chatId: `${params.targetType}:${params.targetId}`,
+        targetType: params.targetType,
+      };
+    } catch (error) {
+      logError(account.accountId, `API request failed: POST ${path}`, error);
+      throw error;
+    }
+  }
+
+  async function listGroupJoinRequests(
+    params: ListGroupJoinRequestsParams,
+  ): Promise<Chat43GroupJoinRequestList> {
+    const search = new URLSearchParams();
+    if (params.status) {
+      search.set("status", params.status);
+    }
+    const path = `/open/group/${encodeURIComponent(params.groupId)}/join-requests${search.size > 0 ? `?${search.toString()}` : ""}`;
+    const response = await requestJson<Chat43GroupJoinRequestList>(path, {
+      method: "GET",
     });
 
-    return {
-      messageId: response.data?.message_id ?? `${packageJson.openclaw.channel.id}_${Date.now()}`,
-      chatId: `${params.targetType}:${params.targetId}`,
-      targetType: params.targetType,
+    return response.data ?? {
+      list: [],
+      total: 0,
     };
+  }
+
+  async function handleGroupJoinRequest(
+    params: HandleGroupJoinRequestParams,
+  ): Promise<Chat43HandleGroupJoinRequestResult> {
+    const body: Record<string, unknown> = {
+      action: params.action,
+    };
+    if (params.action === "reject" && params.rejectReason) {
+      body.reject_reason = params.rejectReason;
+    }
+
+    const response = await requestJson<Chat43HandleGroupJoinRequestResult>(
+      `/open/group/join-request/${encodeURIComponent(params.requestId)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(body),
+      },
+    );
+
+    if (!response.data) {
+      throw new Chat43ApiError({
+        message: "43Chat handle group join request response missing data",
+        retryable: false,
+      });
+    }
+    return response.data;
+  }
+
+  async function listGroupMembers(
+    params: ListGroupMembersParams,
+  ): Promise<Chat43GroupMemberList> {
+    const search = new URLSearchParams();
+    if (params.pageSize) {
+      search.set("page_size", String(params.pageSize));
+    }
+    const path = `/open/group/${encodeURIComponent(params.groupId)}/members${search.size > 0 ? `?${search.toString()}` : ""}`;
+    const response = await requestJson<Chat43GroupMemberList>(path, {
+      method: "GET",
+    });
+
+    return response.data ?? {
+      list: [],
+      total: 0,
+    };
+  }
+
+  async function inviteGroupMembers(
+    params: InviteGroupMembersParams,
+  ): Promise<Chat43InviteGroupMembersResult> {
+    const response = await requestJson<Chat43InviteGroupMembersResult>(
+      `/open/group/${encodeURIComponent(params.groupId)}/invite`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          member_ids: params.memberIds.map((memberId) => Number(memberId)),
+        }),
+      },
+    );
+
+    return response.data ?? {};
+  }
+
+  async function updateGroup(
+    params: UpdateGroupParams,
+  ): Promise<Chat43UpdateGroupResult> {
+    const body: Record<string, unknown> = {};
+    if (params.name) {
+      body.name = params.name;
+    }
+    if (params.avatar) {
+      body.avatar = params.avatar;
+    }
+    if (params.description) {
+      body.description = params.description;
+    }
+    if (params.category) {
+      body.category = params.category;
+    }
+    if (typeof params.joinType === "number") {
+      body.join_type = params.joinType;
+    }
+
+    const response = await requestJson<Chat43UpdateGroupResult>(
+      `/open/group/${encodeURIComponent(params.groupId)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(body),
+      },
+    );
+
+    if (!response.data) {
+      throw new Chat43ApiError({
+        message: "43Chat update group response missing data",
+        retryable: false,
+      });
+    }
+    return response.data;
+  }
+
+  async function removeGroupMember(
+    params: RemoveGroupMemberParams,
+  ): Promise<Chat43RemoveGroupMemberResult> {
+    const body: Record<string, unknown> = {};
+    if (params.reason) {
+      body.reason = params.reason;
+    }
+
+    const response = await requestJson<Chat43RemoveGroupMemberResult>(
+      `/open/group/${encodeURIComponent(params.groupId)}/members/${encodeURIComponent(params.userId)}/remove`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+    );
+
+    if (!response.data) {
+      throw new Chat43ApiError({
+        message: "43Chat remove group member response missing data",
+        retryable: false,
+      });
+    }
+    return response.data;
+  }
+
+  async function dissolveGroup(
+    params: DissolveGroupParams,
+  ): Promise<Chat43DissolveGroupResult> {
+    const body: Record<string, unknown> = {};
+    if (params.reason) {
+      body.reason = params.reason;
+    }
+
+    const response = await requestJson<Chat43DissolveGroupResult>(
+      `/open/group/${encodeURIComponent(params.groupId)}/dissolve`,
+      {
+        method: "DELETE",
+        body: JSON.stringify(body),
+      },
+    );
+
+    if (!response.data) {
+      throw new Chat43ApiError({
+        message: "43Chat dissolve group response missing data",
+        retryable: false,
+      });
+    }
+    return response.data;
   }
 
   return {
     requestJson,
     connectSSE,
     getProfile,
+    listGroupMembers,
+    inviteGroupMembers,
+    updateGroup,
+    removeGroupMember,
+    dissolveGroup,
+    listGroupJoinRequests,
+    handleGroupJoinRequest,
     sendText,
   };
 }

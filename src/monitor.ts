@@ -102,13 +102,9 @@ async function monitorSingleAccount(params: {
   }
 
   combinedSignal?.addEventListener("abort", stopStatus, { once: true });
+  startPromptGroupContextRefresher({ account, runtime });
 
   try {
-    startPromptGroupContextRefresher({
-      account,
-      runtime,
-    });
-
     while (!combinedSignal?.aborted) {
       emitStatus({
         running: true,
@@ -226,7 +222,7 @@ async function monitorSingleAccount(params: {
       }
     }
   } finally {
-    stopPromptGroupContextRefresher(accountId, runtime); 
+    stopPromptGroupContextRefresher(accountId, runtime);
     if (monitorControllers.get(accountId) === localController) {
       monitorControllers.delete(accountId);
     }

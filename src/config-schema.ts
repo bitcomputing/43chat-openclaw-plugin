@@ -3,7 +3,7 @@ import { z } from "zod";
 export { z };
 
 const DmPolicySchema = z.enum(["open", "pairing"]).default("open");
-const ChunkModeSchema = z.enum(["length", "newline", "raw"]).default("newline");
+const ChunkModeSchema = z.enum(["length", "newline", "raw"]).default("raw");
 
 const Chat43SharedConfigShape = {
   dmPolicy: DmPolicySchema.optional(),
@@ -35,6 +35,8 @@ export const Chat43ConfigSchema = z
     enabled: z.boolean().optional(),
     baseUrl: z.string().url().optional(),
     apiKey: z.string().optional(),
+    skillDocsDir: z.string().optional(),
+    skillRuntimePath: z.string().optional(),
     ...Chat43SharedConfigShape,
     accounts: z.record(z.string(), Chat43AccountConfigSchema.optional()).optional(),
   })

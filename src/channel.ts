@@ -9,7 +9,7 @@ import { chat43Outbound } from "./outbound.js";
 import { probe43ChatAccount } from "./client.js";
 import { looksLike43ChatId, normalize43ChatTarget } from "./targets.js";
 import { sendMessage43Chat } from "./send.js";
-import { getPromptGroupContextHints } from "./prompt-group-context.js";
+import { load43ChatSkillRuntime } from "./skill-runtime.js";
 import packageJson from "../package.json" with { type: "json" };
 
 const DEFAULT_ACCOUNT_ID = "default";
@@ -54,19 +54,53 @@ export const chat43Plugin: ChannelPlugin<Resolved43ChatAccount> = {
 
   agentPrompt: {
     messageToolHints: ({ cfg, accountId }) => {
-      const resolvedAccount = resolve43ChatAccount({ cfg, accountId: accountId ?? DEFAULT_ACCOUNT_ID });
-      const groupContextHints = getPromptGroupContextHints(
-        resolvedAccount.accountId,
-        resolvedAccount.config.promptGroupContextMaxItems ?? 8,
-      );
+      const runtime = load43ChatSkillRuntime(cfg);
+      const docPaths = Object.values(runtime.data.docs)
+        .map((filename) => `${runtime.docsDir}/${filename}`);
+      const storageAliases = Object.entries(runtime.data.storage)
+        .map(([alias, path]) => `${alias}: ${path}`);
+      const baseHints = [
+        '- 核心规则: 只发送最终回复内容到 43Chat',
+        '- 回复流程: 1. 内部查看历史 2. 分析思考 3. 发送最终回复',
+        '- 严禁发送: 思考过程, 内部信号, 系统错误, 调试日志',
+        '- 只发送: 最终人类可读回复',
+        '- 43Chat 目标: 省略 target 表示回复当前会话; 格式为 user:<id> 或 group:<id>',
+        '- 入群申请: 先判断再调用 chat43_handle_group_join_request',
+        '- 群管理动作工具: chat43_invite_group_members / chat43_update_group / chat43_remove_group_member / chat43_dissolve_group',
+      ];
+
       return [
-        "- 🚨 核心规则：只发送最终回复内容到 43Chat",
-        "- 回复 43Chat 消息时流程：1. 内部静默查看历史记录 2. 分析和思考 3. 只发送一次最终回复",
-        "- ❌ 严禁发送：思考过程、内部信号、系统错误、调试/日志、指令输出、非人类内容、无意义标记",
-        "- ✅ 只发送：最终人类可读回复，一次性发送",
-        '- 发送前自查："这是人类会说的话吗？" 直接回复，无多余说明或标记。',
-        "- 43Chat 目标说明：省略 `target` 表示回复当前会话；显式目标格式为 `user:<id>` 或 `group:<id>`。",
-        ...groupContextHints,
+        ...baseHints,
+        '',
+        '## 43Chat Skill Runtime',
+        '',
+        `- 账号: ${accountId ?? "default"}`,
+        `- runtime 来源: ${runtime.source === "file" ? runtime.runtimePath : `builtin (${runtime.runtimePath})`}`,
+        `- skill 目录: ${runtime.docsDir}`,
+        '',
+        '收到消息时必须执行:',
+        '',
+        '### 步骤1: 遵循当前事件 profile',
+        '- 事件专属读写要求由插件在上下文中动态注入',
+        '- 必须优先阅读当前事件指定的 Skill 文档和认知文件',
+        '- 不要自创额外认知文件结构',
+        '',
+        '### 步骤2: 生成推理链',
+        '- 必须包含 <think> 块',
+        '- think 字段要求由当前事件 profile 决定',
+        '',
+        '### 步骤3: 执行决策',
+        '- 根据推理结果回复或沉默',
+        '- `groups/...` 和 `profiles/...` 是 43Chat 存储别名，不是 workspace 相对路径',
+        '- 优先按 prompt 中给出的 absolute 路径读写认知文件；如果 `chat43_*` 工具可见也可以直接用',
+        '- `group_state` / `decision_log` 这类运行态文件由插件自动维护，不要求你手动追加',
+        '- 入群申请执行工具，不要只回复文本',
+        '',
+        '### Skill 文档',
+        ...docPaths.map((path) => `- ${path}`),
+        '',
+        '### 存储别名',
+        ...storageAliases.map((entry) => `- ${entry}`),
       ];
     },
   },
@@ -81,6 +115,8 @@ export const chat43Plugin: ChannelPlugin<Resolved43ChatAccount> = {
         enabled: { type: "boolean", default: true, title: "启用账号" },
         baseUrl: { type: "string", format: "uri", default: "https://43chat.cn", title: "43Chat 地址" },
         apiKey: { type: "string", title: "API Key" },
+        skillDocsDir: { type: "string", title: "Skill 文档目录" },
+        skillRuntimePath: { type: "string", title: "Skill Runtime 路径" },
         version: { type: "string", default: packageJson.version, title: "当前插件版本" },
         dmPolicy: {
           type: "string",
@@ -138,7 +174,7 @@ export const chat43Plugin: ChannelPlugin<Resolved43ChatAccount> = {
         chunkMode: {
           type: "string",
           enum: ["length", "newline", "raw"],
-          default: "newline",
+          default: "raw",
           title: "分片模式",
         },
         blockStreaming: {
@@ -184,7 +220,7 @@ export const chat43Plugin: ChannelPlugin<Resolved43ChatAccount> = {
               chunkMode: {
                 type: "string",
                 enum: ["length", "newline", "raw"],
-                default: "newline",
+                default: "raw",
                 title: "分片模式",
               },
               blockStreaming: {

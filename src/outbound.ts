@@ -3,6 +3,31 @@ import { sendMessage43Chat } from "./send.js";
 import { log } from "node:console";
 import packageJson from "../package.json" with { type: "json" };
 
+function classifySuppressedOutboundText(text: string): "no_reply" | "cognition_envelope" | null {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed === "NO_REPLY") {
+    return "no_reply";
+  }
+  if (
+    /^<chat43-cognition>[\s\S]*<\/chat43-cognition>$/i.test(trimmed)
+    || /^```chat43-cognition[\s\S]*```$/i.test(trimmed)
+  ) {
+    return "cognition_envelope";
+  }
+  return null;
+}
+
+function buildSuppressedResult(ctx: ChannelOutboundContext) {
+  return {
+    channel: packageJson.openclaw.channel.id,
+    messageId: "suppressed",
+    chatId: ctx.to ?? "",
+  };
+}
+
 function chunkText(text: string, limit: number): string[] {
   if (text.length <= limit) {
     return [text];
@@ -22,6 +47,11 @@ export const chat43Outbound: ChannelOutboundAdapter = {
   textChunkLimit: 4000,
 
   sendText: async (ctx: ChannelOutboundContext) => {
+    const suppressedReason = classifySuppressedOutboundText(ctx.text ?? "");
+    if (suppressedReason) {
+      log(`43chat[${ctx.accountId}]: suppress outbound ${suppressedReason}`);
+      return buildSuppressedResult(ctx);
+    }
     log(`43chat[${ctx.accountId}]: send text ${ctx.text}`);
     const result = await sendMessage43Chat({
       cfg: ctx.cfg,
@@ -39,6 +69,11 @@ export const chat43Outbound: ChannelOutboundAdapter = {
 
   sendPayload: async (ctx: ChannelOutboundContext & { payload: ReplyPayload }) => {
     const text = ctx.payload.text ?? ctx.text ?? "";
+    const suppressedReason = classifySuppressedOutboundText(text);
+    if (suppressedReason) {
+      log(`43chat[${ctx.accountId}]: suppress outbound payload ${suppressedReason}`);
+      return buildSuppressedResult(ctx);
+    }
     log(`43chat[${ctx.accountId}]: send payload ${text}`);
     const result = await sendMessage43Chat({
       cfg: ctx.cfg,

@@ -1,5 +1,15 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { chat43Plugin } from "./src/channel.js";
+import {
+  createDissolveGroupTool,
+  createInviteGroupMembersTool,
+  createRemoveGroupMemberTool,
+  createUpdateGroupTool,
+} from "./src/group-management-tools.js";
+import { createHandleGroupJoinRequestTool } from "./src/group-join-request-tool.js";
+import { createAppendJsonlTool } from "./src/tools/append-jsonl.js";
+import { createReadJsonTool } from "./src/tools/read-json.js";
+import { createWriteJsonTool } from "./src/tools/write-json.js";
 import { set43ChatRuntime } from "./src/runtime.js";
 import packageJson from "./package.json" with { type: "json" };
 
@@ -16,6 +26,38 @@ const plugin = {
   register(api: OpenClawPluginApi) {
     set43ChatRuntime(api.runtime);
     api.registerChannel({ plugin: chat43Plugin });
+    api.registerTool(
+      (ctx) => ctx.config ? createHandleGroupJoinRequestTool(ctx.config) : null,
+      { name: "chat43_handle_group_join_request" },
+    );
+    api.registerTool(
+      (ctx) => ctx.config ? createReadJsonTool(ctx.config) : null,
+      { name: "chat43_read_json" },
+    );
+    api.registerTool(
+      (ctx) => ctx.config ? createWriteJsonTool(ctx.config) : null,
+      { name: "chat43_write_json" },
+    );
+    api.registerTool(
+      (ctx) => ctx.config ? createAppendJsonlTool(ctx.config) : null,
+      { name: "chat43_append_jsonl" },
+    );
+    api.registerTool(
+      (ctx) => ctx.config ? createInviteGroupMembersTool(ctx.config) : null,
+      { name: "chat43_invite_group_members" },
+    );
+    api.registerTool(
+      (ctx) => ctx.config ? createUpdateGroupTool(ctx.config) : null,
+      { name: "chat43_update_group" },
+    );
+    api.registerTool(
+      (ctx) => ctx.config ? createRemoveGroupMemberTool(ctx.config) : null,
+      { name: "chat43_remove_group_member" },
+    );
+    api.registerTool(
+      (ctx) => ctx.config ? createDissolveGroupTool(ctx.config) : null,
+      { name: "chat43_dissolve_group" },
+    );
   },
 };
 

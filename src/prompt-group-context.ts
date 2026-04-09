@@ -27,6 +27,22 @@ function readString(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function normalizeRoleName(role: string | undefined): string | undefined {
+  if (!role) {
+    return undefined;
+  }
+  if (role === "2" || role === "owner" || role === "群主") {
+    return "群主";
+  }
+  if (role === "1" || role === "admin" || role === "管理员") {
+    return "管理员";
+  }
+  if (role === "0" || role === "member" || role === "成员") {
+    return "成员";
+  }
+  return role;
+}
+
 function toPlainObject(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
@@ -64,44 +80,80 @@ function parseGroupContextItems(payload: unknown): GroupContextItem[] {
     if (!groupId) {
       continue;
     }
-    let role = readString(obj.group_role ?? obj.role ?? obj.member_role );
+
+    let role = normalizeRoleName(readString(obj.group_role ?? obj.role ?? obj.member_role));
     if (!role) {
-      // user_role 当前用户在群中的角色: 2-群主, 1-管理员, 0-普通成员
-      const userRole = readString(obj.user_role);
-      if (userRole) {
-        role = userRole === "2" ? "群主" : userRole === "1" ? "管理员" : "成员";
-      }
+      role = normalizeRoleName(readString(obj.user_role));
     }
+
     groups.push({
       groupId,
       groupName: readString(obj.group_name ?? obj.groupName ?? obj.name),
-      role:  role,
+      role,
     });
   }
+
   return groups;
 }
 
-export function getPromptGroupContextHints(accountId: string, maxItems = 8): string[] {
-  const snapshot = snapshotByAccountId.get(accountId);
-  if (!snapshot) {
-    return [];
-  }
-  if (snapshot.error) {
-    return [`- 43Chat 群组上下文状态：拉取失败（${snapshot.error}）`];
-  }
-  if (snapshot.groups.length === 0) {
-    return ["- 43Chat 群组上下文状态：暂无可用群组身份信息。"];
+export function resolveGroupRoleName(params: {
+  groupId: string;
+  accountId?: string;
+  fallbackRoleName?: string;
+}): string {
+  const { groupId, accountId, fallbackRoleName = "管理员" } = params;
+  const snapshotRole = accountId
+    ? snapshotByAccountId.get(accountId)?.groups.find((group) => group.groupId === groupId)?.role
+    : undefined;
+
+  return normalizeRoleName(snapshotRole) ?? fallbackRoleName;
+}
+
+export async function ensureGroupRoleName(params: {
+  account: Resolved43ChatAccount;
+  groupId: string;
+  runtime?: { log?: (msg: string) => void; error?: (msg: string) => void };
+}): Promise<string | undefined> {
+  const snapshot = snapshotByAccountId.get(params.account.accountId);
+  const maxAgeMs = params.account.config.promptGroupContextRefreshMs ?? 60_000;
+  const cached = snapshot?.groups.find((group) => group.groupId === params.groupId)?.role;
+  if (cached && snapshot && Date.now() - snapshot.updatedAt <= Math.max(5_000, maxAgeMs)) {
+    return normalizeRoleName(cached);
   }
 
-  const hints: string[] = [
-    `- 你在43Chat中已加入的群组以及你在群内的身份如下，可用于在回复43chat消息时提供上下文信息（下面的群组列表身份信息会通过43chat-openclaw-plugin自动更新，最近更新：${new Date(snapshot.updatedAt).toISOString()}）：`,
-  ];
-  for (const group of snapshot.groups.slice(0, Math.max(1, maxItems))) {
-    hints.push(
-      `  -- group:${group.groupId}${group.groupName ? `（${group.groupName}）` : ""}${group.role ? `，在群内身份为：${group.role}` : ""}`,
+  try {
+    const client = create43ChatClient(params.account);
+    const profile = await client.getProfile();
+    const members = await client.listGroupMembers({
+      groupId: params.groupId,
+      pageSize: params.account.config.promptGroupContextMaxItems ?? 100,
+    });
+    const myMember = (members.list ?? []).find((member) => String(member.user_id) === String(profile.user_id));
+    const role = normalizeRoleName(readString(myMember?.role));
+
+    if (role) {
+      const nextSnapshot = snapshotByAccountId.get(params.account.accountId) ?? {
+        updatedAt: Date.now(),
+        groups: [],
+      };
+      const others = nextSnapshot.groups.filter((group) => group.groupId !== params.groupId);
+      snapshotByAccountId.set(params.account.accountId, {
+        updatedAt: Date.now(),
+        groups: [...others, { groupId: params.groupId, role }],
+      });
+      params.runtime?.log?.(
+        `43chat[${params.account.accountId}]: resolved my role for group ${params.groupId} => ${role}`,
+      );
+    }
+
+    return role;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    params.runtime?.error?.(
+      `43chat[${params.account.accountId}]: failed to resolve my role for group ${params.groupId}: ${message}`,
     );
+    return undefined;
   }
-  return hints;
 }
 
 export async function refreshPromptGroupContext(params: {
@@ -114,10 +166,9 @@ export async function refreshPromptGroupContext(params: {
     method: "GET",
   });
 
-  const groups = parseGroupContextItems(response);
   snapshotByAccountId.set(account.accountId, {
     updatedAt: Date.now(),
-    groups,
+    groups: parseGroupContextItems(response),
   });
 }
 
@@ -163,19 +214,17 @@ export function startPromptGroupContextRefresher(params: {
     void refreshOnce();
   }, Math.max(5_000, refreshMs));
   refreshTimerByAccountId.set(account.accountId, timer);
-  runtime?.log?.(
-    `43chat[${account.accountId}]: prompt group context refresher started (${apiPath})`,
-  );
+  runtime?.log?.(`43chat[${account.accountId}]: prompt group context refresher started (${apiPath})`);
 }
 
-export function stopPromptGroupContextRefresher(accountId: string, runtime?: { log?: (msg: string) => void }): void {
+export function stopPromptGroupContextRefresher(
+  accountId: string,
+  runtime?: { log?: (msg: string) => void },
+): void {
   const timer = refreshTimerByAccountId.get(accountId);
   if (timer) {
     clearInterval(timer);
     refreshTimerByAccountId.delete(accountId);
   }
-  runtime?.log?.(
-    `43chat[${accountId}]: prompt group context refresher stopped`,
-  );
+  runtime?.log?.(`43chat[${accountId}]: prompt group context refresher stopped`);
 }
-

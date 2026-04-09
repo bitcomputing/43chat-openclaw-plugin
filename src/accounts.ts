@@ -86,7 +86,7 @@ export function resolve43ChatAccount({
         promptGroupContextRefreshMs: chatCfg.promptGroupContextRefreshMs,
         promptGroupContextMaxItems: chatCfg.promptGroupContextMaxItems,
         textChunkLimit: chatCfg.textChunkLimit,
-        chunkMode: chatCfg.chunkMode ?? "newline",
+        chunkMode: chatCfg.chunkMode ?? "raw",
         blockStreaming: chatCfg.blockStreaming ?? false,
       },
     };
@@ -114,7 +114,7 @@ export function resolve43ChatAccount({
     promptGroupContextMaxItems:
       accountCfg?.promptGroupContextMaxItems ?? chatCfg?.promptGroupContextMaxItems,
     textChunkLimit: accountCfg?.textChunkLimit ?? chatCfg?.textChunkLimit,
-    chunkMode: accountCfg?.chunkMode ?? chatCfg?.chunkMode ?? "newline",
+    chunkMode: accountCfg?.chunkMode ?? chatCfg?.chunkMode ?? "raw",
     blockStreaming: accountCfg?.blockStreaming ?? chatCfg?.blockStreaming ?? false,
   };
 

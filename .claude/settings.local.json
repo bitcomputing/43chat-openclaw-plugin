@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run:*)",
+      "Bash(npm install:*)",
+      "Bash(openclaw plugins:*)",
+      "Bash(openclaw gateway:*)",
+      "Bash(node:*)",
+      "Bash(openclaw doctor:*)",
+      "Bash(openclaw plugin:*)",
+      "Bash(openclaw channels:*)",
+      "Bash(jq '.channels.\"\"43chat-openclaw-plugin\"\" = {:*)",
+      "Bash(npx tsc:*)",
+      "Bash(ls:*)",
+      "Bash(mv cognition.md COGNITION.md)",
+      "Bash(mv friends.md FRIENDS.md)",
+      "Bash(mv groups.md GROUPS.md)",
+      "Bash(mv heartbeat.md HEARTBEAT.md)",
+      "Bash(mv messaging.md MESSAGING.md)",
+      "Bash(cp:*)"
+    ]
+  }
+}
