@@ -1005,6 +1005,87 @@ function buildInnerActivitySummary(params: {
   };
 }
 
+function buildDirectInnerActivitySummary(params: {
+  eventType: Chat43AnySSEEvent["event_type"];
+  messageText: string;
+  decision: string;
+  reason: string;
+  replyText?: string;
+  userProfile?: Record<string, unknown> | null;
+  dialogState?: Record<string, unknown> | null;
+}): Record<string, unknown> {
+  const currentTopics = readStringArray(params.dialogState?.current_topics) ?? [];
+  const pendingActions = readStringArray(params.dialogState?.pending_actions) ?? [];
+  const rapportSummary = readString(params.dialogState?.rapport_summary) ?? "";
+  const questionLike = looksQuestionLike(params.messageText);
+  const interactionStats = isPlainObject(params.userProfile?.interaction_stats) ? params.userProfile?.interaction_stats : {};
+  const totalInteractions = readNumber(interactionStats.total_interactions) ?? 0;
+  const personality = readString(params.userProfile?.personality) ?? "";
+  const shouldReply = params.decision === "reply_sent";
+
+  return {
+    structured_reasoning: {
+      should_reply: shouldReply,
+      question_like: questionLike,
+      interaction_count_after: totalInteractions,
+      persisted_current_topics: currentTopics,
+      pending_actions: pendingActions,
+      rapport_summary: rapportSummary,
+    },
+    inner_activity: {
+      direct_context: `事件=${params.eventType}。当前长期对话状态：topics=${currentTopics.length > 0 ? currentTopics.join(" / ") : "空"}；pending_actions=${pendingActions.length > 0 ? pendingActions.join(" / ") : "空"}；rapport=${rapportSummary || "空"}。`,
+      counterpart: `对方画像：nickname=${readString(params.userProfile?.nickname) ?? ""}；personality=${personality || "空"}；累计互动=${totalInteractions}。`,
+      decision: `决策=${params.decision}。原因=${params.reason}。${shouldReply ? "本轮选择发送私聊回复。" : "本轮不发送私聊回复。"}${questionLike ? " 当前消息呈现明显提问特征。" : ""}`,
+      attached_action: "dialog_decision_log 已追加本轮摘要；长期画像与对话状态由后台 worker 异步归并更新。",
+      profile_update: `画像快照：last_interaction=${readString(interactionStats.last_interaction) ?? ""}，total_interactions=${totalInteractions}。`,
+      reply_strategy: params.replyText
+        ? `回复摘要=${truncateForLog(params.replyText, 160)}`
+        : "未发送文本回复，因此没有 reply_strategy 文本。",
+    },
+  };
+}
+
+function extractDirectEventMessageText(event: Chat43AnySSEEvent): string {
+  switch (event.event_type) {
+    case "private_message":
+      return extract43ChatTextContent((event.data as Chat43PrivateMessageEventData).content);
+    case "friend_request":
+      return readString((event.data as Chat43FriendRequestEventData).request_msg) ?? "";
+    case "friend_accepted":
+      return "对方已通过好友请求";
+    default:
+      return "";
+  }
+}
+
+function resolveDirectEventUserMeta(event: Chat43AnySSEEvent): { userId: string; nickname: string } | null {
+  switch (event.event_type) {
+    case "private_message": {
+      const data = event.data as Chat43PrivateMessageEventData;
+      return {
+        userId: String(data.from_user_id),
+        nickname: data.from_nickname || String(data.from_user_id),
+      };
+    }
+    case "friend_request": {
+      const data = event.data as Chat43FriendRequestEventData;
+      return {
+        userId: String(data.from_user_id),
+        nickname: data.from_nickname || String(data.from_user_id),
+      };
+    }
+    case "friend_accepted": {
+      const data = event.data as Chat43FriendAcceptedEventData;
+      return {
+        userId: String(data.from_user_id),
+        nickname: data.from_nickname || String(data.from_user_id),
+      };
+    }
+    default:
+      return null;
+  }
+}
+
 export function ensureSkillCognitionBootstrap(params: {
   cfg?: ClawdbotConfig;
   event: Chat43AnySSEEvent;
@@ -1208,6 +1289,107 @@ export function finalizeSkillDecision(params: {
   error?: (message: string) => void;
   baseDir?: string;
 }): CognitionMutationResult {
+  if (
+    params.event.event_type === "private_message"
+    || params.event.event_type === "friend_request"
+    || params.event.event_type === "friend_accepted"
+  ) {
+    const resolved = resolveRuntimeTargets(
+      params.cfg,
+      params.event,
+      ["user_profile", "dialog_state", "dialog_decision_log"],
+    );
+    if (!resolved) {
+      return { updated: [], appended: [], skipped: [] };
+    }
+
+    const { targets, defaults } = resolved;
+    const baseDir = params.baseDir ?? STORAGE_ROOT;
+    const updated: string[] = [];
+    const appended: string[] = [];
+    const skipped: string[] = [];
+    const directUserMeta = resolveDirectEventUserMeta(params.event);
+    if (!directUserMeta) {
+      return { updated, appended, skipped };
+    }
+    const messageText = extractDirectEventMessageText(params.event);
+    const userProfile = loadNormalizedAliasRecord({
+      alias: "user_profile",
+      baseDir,
+      targets,
+      defaults,
+    });
+    const dialogState = loadNormalizedAliasRecord({
+      alias: "dialog_state",
+      baseDir,
+      targets,
+      defaults,
+    });
+    const reasoningSummary = buildDirectInnerActivitySummary({
+      eventType: params.event.event_type,
+      messageText,
+      decision: params.decision,
+      reason: params.reason,
+      replyText: params.replyText,
+      userProfile,
+      dialogState,
+    });
+
+    const decisionLogPath = targets.get("dialog_decision_log");
+    if (decisionLogPath) {
+      const fullPath = resolveFullPath(decisionLogPath, baseDir);
+      if (fullPath) {
+        try {
+          appendJsonl(fullPath, {
+            schema_version: "1.0",
+            ts: new Date().toISOString(),
+            event_type: params.event.event_type,
+            message_id: (() => {
+              switch (params.event.event_type) {
+                case "private_message":
+                  return String((params.event.data as Chat43PrivateMessageEventData).message_id || "");
+                case "friend_request":
+                  return String((params.event.data as Chat43FriendRequestEventData).request_id || "");
+                case "friend_accepted":
+                  return String((params.event.data as Chat43FriendAcceptedEventData).request_id || "");
+                default:
+                  return "";
+              }
+            })(),
+            user_id: directUserMeta.userId,
+            nickname: directUserMeta.nickname,
+            current_message: truncateForLog(messageText),
+            current_topics: readStringArray(dialogState?.current_topics) ?? [],
+            pending_actions: readStringArray(dialogState?.pending_actions) ?? [],
+            rapport_summary: readString(dialogState?.rapport_summary) ?? "",
+            decision: params.decision,
+            reason: params.reason,
+            reply_text: params.replyText ? truncateForLog(params.replyText, 400) : "",
+            moderation_decision: params.moderationDecision?.kind ?? "",
+            moderation_reason: params.moderationDecision?.reason ?? "",
+            moderation_scenario: params.moderationDecision?.scenario ?? "",
+            moderation_stage: params.moderationDecision?.stage ?? "",
+            moderation_target_user_id: params.moderationDecision?.targetUserId ?? "",
+            moderation_public_reply: params.moderationDecision?.publicReply ?? null,
+            cognition_control_mode: "document_driven_llm",
+            ...reasoningSummary,
+          });
+          appended.push(decisionLogPath);
+        } catch (cause) {
+          params.error?.(`43chat: failed to append direct decision log ${decisionLogPath}: ${String(cause)}`);
+        }
+      } else {
+        skipped.push("dialog_decision_log");
+      }
+    }
+
+    if (updated.length > 0 || appended.length > 0) {
+      params.log?.(`43chat: finalized cognition updated=${updated.join(", ") || "-"} appended=${appended.join(", ") || "-"}`);
+    }
+
+    return { updated, appended, skipped };
+  }
+
   if (params.event.event_type !== "group_message") {
     return { updated: [], appended: [], skipped: [] };
   }

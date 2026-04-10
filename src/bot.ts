@@ -22,7 +22,7 @@ import {
   buildDecisionBriefPromptBlocks,
   scheduleDecisionBriefRefresh,
 } from "./cognition-batch.js";
-import { scheduleGroupLongTermCognitionRefresh } from "./cognition-worker.js";
+import { scheduleLongTermCognitionRefresh } from "./cognition-worker.js";
 import { extract43ChatTextContent, truncateForLog } from "./message-content.js";
 import { evaluateReplyPolicy } from "./reply-policy.js";
 import { ensureSessionLogDir, resolveSessionLogDir } from "./session-log-dir.js";
@@ -772,7 +772,7 @@ export function parseCognitionWriteEnvelope(text: string): CognitionWriteEnvelop
       return null;
     }
 
-    const writes = parsed.writes
+    const parsedWrites = parsed.writes
       .map((entry) => {
         if (!isPlainObject(entry)) {
           return null;
@@ -783,7 +783,11 @@ export function parseCognitionWriteEnvelope(text: string): CognitionWriteEnvelop
           return null;
         }
         return { path, content };
-      })
+      });
+    if (parsedWrites.some((entry) => entry === null)) {
+      return null;
+    }
+    const writes = parsedWrites
       .filter((entry): entry is { path: string; content: Record<string, unknown> } => Boolean(entry));
 
     const replyText = readOptionalString(parsed.reply)
@@ -1198,14 +1202,13 @@ export function shouldRetryDispatchForEmptyOutcome(params: {
 }
 
 export function shouldParseCognitionEnvelopeForInbound(params: {
-  chatType: InboundDescriptor["chatType"];
+  eventType: Chat43AnySSEEvent["event_type"];
 }): boolean {
-  return params.chatType === "direct";
+  return shouldForceEnvelopeForEvent(params.eventType);
 }
 
 function shouldForceEnvelopeForEvent(eventType: Chat43AnySSEEvent["event_type"]): boolean {
-  return eventType === "private_message"
-    || eventType === "friend_request"
+  return eventType === "friend_request"
     || eventType === "friend_accepted";
 }
 
@@ -1402,16 +1405,16 @@ export async function handle43ChatEvent(
     eventType: event.event_type,
     roleName: resolvedRoleNameOverride,
   });
+  const forceEnvelopeForMainFlow = shouldForceEnvelopeForEvent(event.event_type);
   let requiredIssueAliasesForEvent = new Set<CognitionWriteRequirementIssue["alias"]>();
   let initialMissingIssues: CognitionWriteRequirementIssue[] = [];
   let initialMissingSummaries: string[] = [];
   let initialPromptBlocks: SkillRuntimePromptBlock[] = [];
   const decisionBriefPromptBlocks = buildDecisionBriefPromptBlocks({ event });
-  const shouldPromptInlineCognition = event.event_type === "private_message";
-  const forceEnvelopeForMainFlow = shouldForceEnvelopeForEvent(event.event_type);
+  const shouldPromptInlineCognition = forceEnvelopeForMainFlow;
   if (
     cognitionEnforcement.enabled
-    && (event.event_type === "group_message" || event.event_type === "private_message")
+    && (event.event_type === "group_message" || forceEnvelopeForMainFlow)
   ) {
     const issues = inspectCognitionWriteRequirementsForEvent({
       cfg,
@@ -1427,9 +1430,7 @@ export async function handle43ChatEvent(
       initialPromptBlocks = buildMissingCognitionPromptBlocks(initialMissingSummaries, replyPolicy.noReplyToken);
     }
   }
-  const mainFlowMissingSummaries = event.event_type === "group_message"
-    ? []
-    : initialMissingSummaries;
+  const mainFlowMissingSummaries = forceEnvelopeForMainFlow ? initialMissingSummaries : [];
 
   let inbound = buildInboundDescriptor(event, {
     cfg,
@@ -1586,7 +1587,7 @@ export async function handle43ChatEvent(
       log,
       error,
     });
-    scheduleGroupLongTermCognitionRefresh({
+    scheduleLongTermCognitionRefresh({
       cfg,
       event,
       log,
@@ -1728,7 +1729,7 @@ export async function handle43ChatEvent(
     let result = firstResult;
     const firstParsedEnvelope = parseCognitionWriteEnvelope(firstResult.finalText);
     let cognitionEnvelope = shouldParseCognitionEnvelopeForInbound({
-      chatType: inbound.chatType,
+      eventType: event.event_type,
     })
       ? firstParsedEnvelope
       : null;
@@ -1803,7 +1804,7 @@ export async function handle43ChatEvent(
       });
       const retryParsedEnvelope = parseCognitionWriteEnvelope(retryResult.finalText);
       const retryEnvelope = shouldParseCognitionEnvelopeForInbound({
-        chatType: inbound.chatType,
+        eventType: event.event_type,
       })
         ? retryParsedEnvelope
         : null;
@@ -1894,7 +1895,7 @@ export async function handle43ChatEvent(
     let currentMissingSummaries: string[] = [];
     if (
       cognitionEnforcement.enabled
-      && (event.event_type === "group_message" || event.event_type === "private_message")
+      && (event.event_type === "group_message" || forceEnvelopeForMainFlow)
     ) {
       const issues = inspectCognitionWriteRequirementsForEvent({
         cfg,
@@ -1910,7 +1911,10 @@ export async function handle43ChatEvent(
     const resolution = resolveGroupAttemptResolution({
       outcome: attemptOutcome,
       missingSummaries: currentMissingSummaries,
-      blockedForCognition: false,
+      blockedForCognition: forceEnvelopeForMainFlow
+        && cognitionEnforcement.enabled
+        && cognitionEnforcement.block_final_reply_when_incomplete
+        && currentMissingSummaries.length > 0,
       blockedForModerationDecision: moderationDecisionRequired && !moderationDecision,
       attempt: 1,
       maxAttempts: 1,
@@ -1931,7 +1935,7 @@ export async function handle43ChatEvent(
     }
 
     if (
-      (event.event_type === "group_message" || event.event_type === "private_message")
+      (event.event_type === "group_message" || forceEnvelopeForMainFlow)
       && currentMissingSummaries.length > 0
     ) {
       log(

@@ -172,9 +172,12 @@ function renderRoleDefinition(params: {
 }
 
 function shouldForceCognitionEnvelopeForDirectEvent(eventType: string): boolean {
-  return eventType === "private_message"
-    || eventType === "friend_request"
+  return eventType === "friend_request"
     || eventType === "friend_accepted";
+}
+
+function shouldUseAsyncCognitionWorker(eventType: string): boolean {
+  return eventType === "private_message" || eventType === "group_message";
 }
 
 export function resolvePromptRoleName(params: {
@@ -349,7 +352,7 @@ export function buildSkillEventContext(params: BuildSkillEventContextParams): Bu
   lines.push(...formatAliasedToolCalls("【先读取这些认知文件】", readTargets));
   if (shouldForceCognitionEnvelopeForDirectEvent(params.eventType)) {
     lines.push(...formatAliasedToolCalls("【本轮需要你显式维护的长期认知文件】", modelWriteTargets.filter((entry) => !entry.path.endsWith(".jsonl"))));
-  } else if (modelWriteTargets.length > 0) {
+  } else if (shouldUseAsyncCognitionWorker(params.eventType) && modelWriteTargets.length > 0) {
     lines.push(...formatAliasedToolCalls("【这些长期认知文件由后台 worker 异步补写】", modelWriteTargets.filter((entry) => !entry.path.endsWith(".jsonl"))));
   }
   lines.push(...formatAliasedToolCalls("【这些运行态文件由插件自动维护】", pluginManagedWriteTargets));
@@ -386,14 +389,20 @@ export function buildSkillEventContext(params: BuildSkillEventContextParams): Bu
   lines.push("");
   lines.push("【认知写入执行要求】");
   if (shouldForceCognitionEnvelopeForDirectEvent(params.eventType)) {
-    lines.push("- 插件不会根据关键词、正则或 topic 摘要替你写长期认知；是否写入由你依据 Skill 文档和下列规则自行判断");
-    lines.push("- 私聊长期认知仍由当前主流程显式维护；`dialog_state` / `user_profile` 需要你结合当前消息与上下文写入");
-    lines.push(`- 认知写入不是可选优化；如果当前消息已经提供可复用的稳定结论，本轮必须先写入对应 JSON，再回复或输出 \`${replyPolicy.no_reply_token}\``);
-    lines.push("- 主流程没有额外的认知补写回合；本轮要写的长期认知，必须在这一次最终输出里和回复决策一起完成");
-    lines.push("- 私聊与好友事件的最终输出也统一使用 `<chat43-cognition>{\"writes\":[...],\"reply\":\"...\"}</chat43-cognition>`；不要输出裸文本、不要只输出 `<final>...</final>`");
-    lines.push(`- 即使本轮没有新增长期认知，也要输出 envelope；此时可写成 \`<chat43-cognition>{\"writes\":[],\"reply\":\"...\"}</chat43-cognition>\`，插件会只对外发送 \`reply\``);
+    lines.push("- 插件不会替你自动补这类直接事件的长期认知；如果本轮需要沉淀稳定结论，由你在主流程显式写入");
+    lines.push("- 本轮要写的长期认知，必须和回复决策一起在这一次最终输出里完成");
+    lines.push("- 最终输出统一使用 `<chat43-cognition>{\"writes\":[...],\"reply\":\"...\"}</chat43-cognition>`；不要输出裸文本、不要只输出 `<final>...</final>`");
+    lines.push(`- 即使本轮没有新增长期认知，也要输出 envelope；此时可写成 \`<chat43-cognition>{\"writes\":[],\"reply\":\"...\"}</chat43-cognition>\``);
     lines.push(`- 如果本轮不回复，也要输出 envelope，且 \`reply\` 必须写为 \`${replyPolicy.no_reply_token}\``);
-    lines.push("- 但私聊一旦出现偏好、自我定义、关系定位、持续话题、后续约定等长期信号，就不允许继续用 `writes: []`；至少补 `dialog_state`，命中稳定人物信号时再补 `user_profile`");
+  } else if (params.eventType === "private_message") {
+    lines.push("- 私聊长期认知默认改由后台 cognition worker 异步维护：它会读取本地模型配置、按批次归并私聊消息，再写回 `user_profile` / `dialog_state`");
+    lines.push("- 因此普通私聊主流程本轮只负责回复判断与文本回复；不要为了补长期认知而输出任何结构化 envelope");
+    lines.push("- 私聊主流程不要调用 `edit` / `write` 直接改写 `user_profile` / `dialog_state`；新增观察交给后台 worker 归并落库");
+    lines.push(`- 如果当前消息不需要回复，直接输出 \`${replyPolicy.no_reply_token}\`；如果需要回复，直接输出普通文本`);
+    lines.push("- 最终答案只允许是可发送的普通文本，或精确的 `NO_REPLY`；不能输出 XML/JSON 包裹、不能输出 `writes` 字段、不能输出工具失败提示");
+    lines.push("- 即使当前私聊画像或对话状态仍为空，也不要把主流程改成补文档回合；后台 worker 会继续补写长期认知");
+    lines.push("- 当前主流程可以参考已有认知文件做判断，但不要承担 `user_profile` / `dialog_state` 的补写任务");
+    lines.push("- 本轮观察与决策仍会进入 `dialog_decision_log`；后台 batch 会依据文档把稳定结论沉淀进长期认知");
   } else {
     lines.push("- 群聊长期认知默认改由后台 cognition worker 异步维护：它会读取本地模型配置、按批次归并消息，再写回 `group_soul` / `user_profile` / `group_members_graph`");
     lines.push("- 因此普通群聊主流程本轮只负责回复判断与公开回复；不要为了补长期认知而输出任何结构化 envelope");

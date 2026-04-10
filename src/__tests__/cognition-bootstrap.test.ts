@@ -1389,4 +1389,47 @@ describe("43Chat cognition bootstrap", () => {
     expect(lastEntry.current_topic).toBe("云南 7 天轻松路线");
     expect(lastEntry.recent_topics).toEqual(["云南 7 天轻松路线"]);
   });
+
+  it("appends dialog_decision_log for private-message finalization", () => {
+    const dir = mkdtempSync(join(tmpdir(), "43chat-bootstrap-"));
+    tempDirs.push(dir);
+    const event = {
+      id: "evt-bootstrap-finalize-direct-log",
+      event_type: "private_message" as const,
+      timestamp: 1000,
+      data: {
+        message_id: "pm-finalize-1",
+        from_user_id: 12386,
+        from_nickname: "等风来",
+        to_user_id: 12450,
+        content_type: "text",
+        content: "{\"content\":\"我喜欢骑摩托去找山爬。\"}",
+        timestamp: 1000,
+      },
+    };
+
+    ensureSkillCognitionBootstrap({ baseDir: dir, event });
+    updateSkillCognitionFromEvent({ baseDir: dir, event });
+    const result = finalizeSkillDecision({
+      baseDir: dir,
+      event,
+      decision: "reply_sent",
+      reason: "plugin delivered final text reply",
+      replyText: "骑摩托找山挺自由的。",
+    });
+
+    expect(result.updated).toEqual([]);
+    expect(result.appended).toContain("dialogs/12386/decision_log.jsonl");
+
+    const lines = readFileSync(join(dir, "dialogs/12386/decision_log.jsonl"), "utf8").trim().split("\n");
+    const lastEntry = JSON.parse(lines.at(-1) ?? "{}");
+    expect(lastEntry.event_type).toBe("private_message");
+    expect(lastEntry.message_id).toBe("pm-finalize-1");
+    expect(lastEntry.user_id).toBe("12386");
+    expect(lastEntry.current_message).toContain("我喜欢骑摩托去找山爬");
+    expect(lastEntry.reply_text).toContain("骑摩托找山挺自由");
+    expect(lastEntry.current_topics).toEqual([]);
+    expect(lastEntry.cognition_control_mode).toBe("document_driven_llm");
+    expect(lastEntry.structured_reasoning.should_reply).toBe(true);
+  });
 });

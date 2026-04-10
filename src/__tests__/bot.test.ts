@@ -80,9 +80,11 @@ describe("43Chat event mapping", () => {
     expect(descriptor?.groupSystemPrompt).toContain("【43Chat Skill Runtime】");
     expect(descriptor?.groupSystemPrompt).toContain("【当前私聊上下文】");
     expect(descriptor?.groupSystemPrompt).toContain("profiles/12373.json");
-    expect(descriptor?.groupSystemPrompt).toContain("私聊与好友事件的最终输出也统一使用 `<chat43-cognition>");
-    expect(descriptor?.groupSystemPrompt).toContain("\"writes\":[],\"reply\":\"...\"");
-    expect(descriptor?.groupSystemPrompt).toContain("私聊一旦出现偏好、自我定义、关系定位、持续话题、后续约定等长期信号，就不允许继续用 `writes: []`");
+    expect(descriptor?.groupSystemPrompt).toContain("私聊长期认知默认改由后台 cognition worker 异步维护");
+    expect(descriptor?.groupSystemPrompt).toContain("私聊主流程不要调用 `edit` / `write` 直接改写 `user_profile` / `dialog_state`");
+    expect(descriptor?.groupSystemPrompt).toContain("【这些长期认知文件由后台 worker 异步补写】");
+    expect(descriptor?.groupSystemPrompt).not.toContain("私聊与好友事件的最终输出也统一使用 `<chat43-cognition>");
+    expect(descriptor?.groupSystemPrompt).not.toContain("\"writes\":[],\"reply\":\"...\"");
   });
 
   it("keeps group message body clean and moves runtime guidance into GroupSystemPrompt", () => {
@@ -335,6 +337,14 @@ describe("43Chat event mapping", () => {
       writes: [],
       replyText: "这是一条普通回复",
     });
+  });
+
+  it("rejects cognition write envelopes when any write entry uses an unsupported shape", () => {
+    const parsed = parseCognitionWriteEnvelope(`
+<chat43-cognition>{"writes":[{"type":"edit","path":"profiles/12386.json","oldText":"\\"tags\\": []","newText":"\\"tags\\": [\\"喜欢旅游\\"]"}],"reply":"到处走挺好的"}</chat43-cognition>
+    `);
+
+    expect(parsed).toBeNull();
   });
 
   it("parses cognition write envelope from mixed reply text and trailing xml-style wrapper", () => {
@@ -752,13 +762,17 @@ describe("43Chat event mapping", () => {
     })).toBeUndefined();
   });
 
-  it("parses cognition envelopes only for direct inbound events", () => {
+  it("parses cognition envelopes only for direct events that still require envelopes", () => {
     expect(shouldParseCognitionEnvelopeForInbound({
-      chatType: "group",
+      eventType: "group_message",
     })).toBe(false);
 
     expect(shouldParseCognitionEnvelopeForInbound({
-      chatType: "direct",
+      eventType: "private_message",
+    })).toBe(false);
+
+    expect(shouldParseCognitionEnvelopeForInbound({
+      eventType: "friend_request",
     })).toBe(true);
   });
 

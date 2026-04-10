@@ -17,7 +17,8 @@
       "Bash(mv groups.md GROUPS.md)",
       "Bash(mv heartbeat.md HEARTBEAT.md)",
       "Bash(mv messaging.md MESSAGING.md)",
-      "Bash(cp:*)"
+      "Bash(cp:*)",
+      "Bash(python3 -m json.tool)"
     ]
   }
 }
