@@ -17,6 +17,8 @@ import {
   resolvePrimaryDispatchSessionKey,
   resolveGroupAttemptResolution,
   recoverRecentFinalReplyFromSessionLog,
+  extractReusableOutwardReplyText,
+  resolveRetryFallbackForMissingEnvelope,
   shouldParseCognitionEnvelopeForInbound,
   shouldRetryDispatchForEmptyOutcome,
   summarizeReplyPayloadForLog,
@@ -86,7 +88,9 @@ describe("43Chat event mapping", () => {
     expect(descriptor?.groupSystemPrompt).toContain("私聊主流程不要调用 `edit` / `write` 直接改写 `user_profile` / `dialog_state`");
     expect(descriptor?.groupSystemPrompt).toContain("【这些长期认知文件由后台 worker 异步补写】");
     expect(descriptor?.groupSystemPrompt).toContain("私聊主流程最终输出统一使用 `<chat43-cognition>{...}</chat43-cognition>`");
+    expect(descriptor?.groupSystemPrompt).toContain("唯一合法示例：`<chat43-cognition>{\"envelope\":{\"reply\":\"你好\"},\"writes\":[]}</chat43-cognition>`");
     expect(descriptor?.groupSystemPrompt).toContain("真正对外发送的文本写进 envelope.reply");
+    expect(descriptor?.groupSystemPrompt).toContain("不要输出 `<thinking>`、`<envelope>`、`<reply>`、`<writes>` 这类 XML 标签");
     expect(descriptor?.groupSystemPrompt).toContain("`writes` 默认写空数组 `[]`");
   });
 
@@ -387,6 +391,25 @@ describe("43Chat event mapping", () => {
     });
   });
 
+  it("parses legacy xml-style inner tags inside chat43 cognition wrapper", () => {
+    const parsed = parseCognitionWriteEnvelope(`
+<chat43-cognition>
+<thinking>
+对方：等风来
+</thinking>
+<envelope>
+<reply>好的，不回去就不回去。</reply>
+<writes>[]</writes>
+</envelope>
+</chat43-cognition>
+    `);
+
+    expect(parsed).toEqual({
+      writes: [],
+      replyText: "好的，不回去就不回去。",
+    });
+  });
+
   it("recovers malformed nested envelope when reply contains unescaped quotes", () => {
     const parsed = parseCognitionWriteEnvelope(`
 <chat43-cognition>
@@ -578,6 +601,51 @@ describe("43Chat event mapping", () => {
       finalReplyText: "这是一条真正要发到群里的文本回复",
       noReplyToken: "NO_REPLY",
     })).toContain("raw_kind=cognition_envelope writes=1 outward=这是一条真正要发到群里的文本回复");
+  });
+
+  it("keeps the first outward private reply when retry still lacks cognition envelope", () => {
+    expect(resolveRetryFallbackForMissingEnvelope({
+      chatType: "direct",
+      retryFinalText: "这是重试发送的消息，请忽略。",
+      retryForEnvelope: true,
+      firstAttemptOutcome: {
+        kind: "reply",
+        replyText: "第一次的正常私聊回复",
+        reason: "plugin delivered final text reply",
+      },
+    })).toEqual({
+      keepFirstOutwardReply: true,
+      finalReplyText: "第一次的正常私聊回复",
+    });
+  });
+
+  it("extracts reusable outward text from malformed prior cognition output", () => {
+    expect(extractReusableOutwardReplyText(`
+<chat43-cognition>
+<thinking>
+对方：等风来
+</thinking>
+<envelope>
+<reply>好的，不回去就不回去。</reply>
+<writes>[]</writes>
+</envelope>
+</chat43-cognition>
+    `)).toBe("好的，不回去就不回去。");
+  });
+
+  it("falls back to the latest retry reply when no first outward reply exists", () => {
+    expect(resolveRetryFallbackForMissingEnvelope({
+      chatType: "direct",
+      retryFinalText: "NO_REPLY",
+      retryForEnvelope: true,
+      firstAttemptOutcome: {
+        kind: "no_reply",
+        reason: "model explicitly returned NO_REPLY",
+      },
+    })).toEqual({
+      keepFirstOutwardReply: false,
+      finalReplyText: "NO_REPLY",
+    });
   });
 
   it("normalizes remove-member reasons to fit API limits", () => {

@@ -418,9 +418,11 @@ export function buildSkillEventContext(params: BuildSkillEventContextParams): Bu
   } else if (params.eventType === "private_message") {
     lines.push("- 私聊长期认知默认改由后台 cognition worker 异步维护：它会读取本地模型配置、按批次归并私聊消息，再写回 `user_profile` / `dialog_state`");
     lines.push("- 私聊主流程最终输出统一使用 `<chat43-cognition>{...}</chat43-cognition>`；不要输出裸文本、不要只输出 `<final>...</final>`、不要输出裸 `NO_REPLY`");
+    lines.push("- 唯一合法示例：`<chat43-cognition>{\"envelope\":{\"reply\":\"你好\"},\"writes\":[]}</chat43-cognition>`；`<chat43-cognition>` 标签里面只能放合法 JSON");
     lines.push(`- 真正对外发送的文本写进 envelope.reply；若当前消息不需要回复，就把 envelope.reply 写成 \`${replyPolicy.no_reply_token}\``);
     lines.push("- `writes` 默认写空数组 `[]`；私聊长期认知继续由后台 worker 异步补写，不要在主流程里承担 `user_profile` / `dialog_state` 的补写任务");
     lines.push("- 私聊主流程不要调用 `edit` / `write` 直接改写 `user_profile` / `dialog_state`；新增观察交给后台 worker 归并落库");
+    lines.push("- 不要输出 `<thinking>`、`<envelope>`、`<reply>`、`<writes>` 这类 XML 标签；更不要把这些标签包在 `<chat43-cognition>` 里面");
     lines.push("- 如果上下文里出现结构化 envelope、`read` / `edit` / `write` 工具轨迹，或 `⚠️ 📝 Edit...failed` 之类内部内容，当前私聊主流程必须忽略，不能模仿、不能复述、不能继续输出");
     lines.push("- 不要输出“我没有这个工具”“插件会处理”“this is a retry”之类说明文本；真正对外发送的只有 envelope.reply");
     lines.push("- 即使当前私聊画像或对话状态仍为空，也不要把主流程改成补文档回合；后台 worker 会继续补写长期认知");

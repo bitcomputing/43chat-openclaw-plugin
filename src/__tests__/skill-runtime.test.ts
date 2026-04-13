@@ -36,6 +36,9 @@ describe("43Chat skill runtime", () => {
 
     expect(runtime.source).toBe("builtin");
     expect(runtime.data.storage.group_soul).toBe("groups/{group_id}/soul.json");
+    expect(runtime.data.event_profiles.private_message.prompt_blocks?.[0]?.title).toBe("私聊主流程协议");
+    expect(runtime.data.event_profiles.private_message.prompt_blocks?.[0]?.lines?.[0]).toContain("<chat43-cognition>");
+    expect(runtime.data.event_profiles.private_message.prompt_blocks?.[0]?.lines?.[1]).toContain("\"envelope\":{\"reply\":\"你好\"}");
   });
 
   it("uses runtime file overrides without changing plugin code", () => {

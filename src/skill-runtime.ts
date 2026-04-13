@@ -481,6 +481,18 @@ export const DEFAULT_SKILL_RUNTIME: SkillRuntime = {
       reply_mode: "normal",
       chat_type: "direct",
       required_think_fields: ["对方", "话题", "决策", "附带动作", "画像更新"],
+      prompt_blocks: [
+        {
+          title: "私聊主流程协议",
+          lines: [
+            "私聊主流程最终输出统一使用 `<chat43-cognition>{...}</chat43-cognition>`；不要输出裸文本、不要只输出 `<final>...</final>`、不要输出裸 `NO_REPLY`",
+            "唯一合法示例：`<chat43-cognition>{\"envelope\":{\"reply\":\"你好\"},\"writes\":[]}</chat43-cognition>`；`<chat43-cognition>` 标签里面只能放合法 JSON",
+            "真正对外发送的文本写进 envelope.reply；若当前消息不需要回复，就把 envelope.reply 写成 `{no_reply_token}`",
+            "不要输出 `<thinking>`、`<envelope>`、`<reply>`、`<writes>` 这类 XML 标签",
+            "`writes` 默认写空数组 `[]`；不要输出“我没有这个工具”“插件会处理”“this is a retry”之类说明文本",
+          ],
+        },
+      ],
     },
     group_message: {
       docs: ["cognition", "groups", "friends", "messaging", "rules"],

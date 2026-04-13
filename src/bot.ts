@@ -197,6 +197,60 @@ function unwrapFinalReplyTag(text: string): string {
   return (match[1] ?? "").trim();
 }
 
+function extractLegacyXmlEnvelopeBlock(raw: string, tagName: string): string | undefined {
+  const match = raw.match(new RegExp(`<${tagName}>([\\s\\S]*?)</${tagName}>`, "i"));
+  return match?.[1]?.trim();
+}
+
+function parseLegacyXmlStyleCognitionEnvelope(raw: string): CognitionWriteEnvelope | null {
+  const replyText = extractLegacyXmlEnvelopeBlock(raw, "reply");
+  const writesRaw = extractLegacyXmlEnvelopeBlock(raw, "writes");
+  const decisionRaw = extractLegacyXmlEnvelopeBlock(raw, "decision");
+
+  if (replyText === undefined && writesRaw === undefined && decisionRaw === undefined) {
+    return null;
+  }
+
+  let writes: Array<{ path: string; content: Record<string, unknown> }> = [];
+  if (writesRaw !== undefined) {
+    try {
+      const parsedWrites = parseLooseCognitionEnvelopeJson(writesRaw);
+      const normalizedWrites = parseEnvelopeWrites(parsedWrites);
+      if (!normalizedWrites) {
+        return null;
+      }
+      writes = normalizedWrites;
+    } catch {
+      return null;
+    }
+  }
+
+  let decision: CognitionEnvelopeModerationDecision | undefined;
+  if (decisionRaw !== undefined) {
+    try {
+      const parsedDecision = parseLooseCognitionEnvelopeJson(decisionRaw);
+      decision = parseCognitionEnvelopeDecision(parsedDecision)
+        ?? parseLegacyCognitionEnvelopeModerationDecision(parsedDecision);
+    } catch {
+      return null;
+    }
+  }
+
+  return {
+    writes,
+    replyText: replyText ?? "",
+    ...(decision ? { decision } : {}),
+  };
+}
+
+export function extractReusableOutwardReplyText(text: string): string {
+  const parsedEnvelope = parseCognitionWriteEnvelope(text);
+  if (parsedEnvelope) {
+    return parsedEnvelope.replyText.trim();
+  }
+  return unwrapFinalReplyTag(text).trim();
+}
+
 export function recoverRecentFinalReplyFromSessionLog(params: {
   sessionKey: string;
   sinceTimestamp: number;
@@ -788,7 +842,8 @@ export function parseCognitionWriteEnvelope(text: string): CognitionWriteEnvelop
       fallbackReplyText: text.replace(match[0], "").trim(),
     });
   } catch {
-    return parseMalformedCognitionWriteEnvelope(match[1]);
+    return parseMalformedCognitionWriteEnvelope(match[1])
+      ?? parseLegacyXmlStyleCognitionEnvelope(match[1]);
   }
 }
 
@@ -1355,6 +1410,7 @@ function buildEnvelopeRetryPromptBlocks(params: {
     : (writesRequired
       ? "当前消息没有新的缺失槽位；若你输出 cognition envelope，仍需保持结构合法。"
       : "当前没有额外的长期认知写入要求；若只需返回管理决策，`writes` 直接写空数组 `[]`。");
+  const reusablePriorReplyText = extractReusableOutwardReplyText(params.priorReplyText);
 
   return [{
     title: "认知 Envelope 重试",
@@ -1363,6 +1419,8 @@ function buildEnvelopeRetryPromptBlocks(params: {
         ? "上一轮输出格式无效：当前仍有必须写入的长期认知，但你输出了普通文本或普通 `NO_REPLY`。"
         : "上一轮输出格式无效：本轮必须显式返回结构化管理决策，但你输出了普通文本或普通 `NO_REPLY`。",
       "本轮必须只输出一个 `<chat43-cognition>{...}</chat43-cognition>` envelope，不能输出裸文本，不能输出 `<final>...</final>`。",
+      "唯一合法示例：`<chat43-cognition>{\"envelope\":{\"reply\":\"你好\"},\"writes\":[]}</chat43-cognition>`。",
+      "不要输出 `<thinking>`、`<envelope>`、`<reply>`、`<writes>` 这类 XML 标签；标签内部必须是合法 JSON。",
       "如果当前消息需要公开回复，把完整公开回复文本放进 envelope.reply；插件只会对外发送这个 `reply`。",
       `如果当前消息不该公开回复，envelope.reply 必须写为 "${params.noReplyToken}"。`,
       writesRequired
@@ -1375,8 +1433,8 @@ function buildEnvelopeRetryPromptBlocks(params: {
         ]
         : []),
       missingSummaryLine,
-      params.priorReplyText
-        ? `你上一轮的公开回复候选如下；若内容合适，请直接复用到 envelope.reply：${params.priorReplyText}`
+      reusablePriorReplyText
+        ? `你上一轮的公开回复纯文本候选如下；若内容合适，请只复用这段文字到 envelope.reply：${reusablePriorReplyText}`
         : "你上一轮没有形成可发送的公开回复；如本轮也不需要公开回复，请把 envelope.reply 写为 NO_REPLY。",
     ],
   }];
@@ -1390,6 +1448,7 @@ function buildEmptyReplyRetryPromptBlocks(params: {
   const expectedReplyForms = params.requireCognitionEnvelope
     ? "一个合法的 `<chat43-cognition>{...}</chat43-cognition>` envelope。"
     : "普通文本或 `NO_REPLY`。";
+  const reusablePriorReplyText = extractReusableOutwardReplyText(params.priorReplyText);
   return [{
     title: "主回复空结果重试",
     lines: [
@@ -1397,12 +1456,14 @@ function buildEmptyReplyRetryPromptBlocks(params: {
       `本轮必须给出一个明确可发送结果：${expectedReplyForms}`,
       ...(params.requireCognitionEnvelope
         ? [
+          "唯一合法示例：`<chat43-cognition>{\"envelope\":{\"reply\":\"你好\"},\"writes\":[]}</chat43-cognition>`。",
           "如果需要公开回复，把完整文本放进 envelope.reply；如果不该公开回复，就把 envelope.reply 写成 `NO_REPLY`。",
+          "不要输出 `<thinking>`、`<envelope>`、`<reply>`、`<writes>` 这类 XML 标签；标签内部必须是合法 JSON。",
           "不要输出裸文本、不要输出裸 `NO_REPLY`、不要让最终回复留空。",
         ]
         : ["不要只输出空白、不要只思考不输出、不要让最终回复留空。"]),
-      params.priorReplyText
-        ? `上一轮已捕获到的候选文本如下；如果它本身可用，可以直接复用：${params.priorReplyText}`
+      reusablePriorReplyText
+        ? `上一轮已捕获到的纯文本候选如下；如果它本身可用，可以直接复用：${reusablePriorReplyText}`
         : `如果你判断当前不该回复，请明确输出 \`${params.noReplyToken}\`，不要留空。`,
     ],
   }];
@@ -1529,6 +1590,28 @@ export function shouldRetryDispatchForEmptyOutcome(params: {
   maxAttempts: number;
 }): boolean {
   return params.outcome.kind === "empty" && params.attempt < params.maxAttempts;
+}
+
+export function resolveRetryFallbackForMissingEnvelope(params: {
+  chatType: "direct" | "group";
+  retryFinalText: string;
+  retryForEnvelope: boolean;
+  firstAttemptOutcome: DispatchAttemptOutcome;
+}): {
+  keepFirstOutwardReply: boolean;
+  finalReplyText: string;
+} {
+  const retryFallbackReplyText = params.chatType === "group"
+    ? resolveGroupFinalReplyText(params.retryFinalText)
+    : params.retryFinalText.trim();
+  const keepFirstOutwardReply = params.retryForEnvelope && params.firstAttemptOutcome.kind === "reply";
+
+  return {
+    keepFirstOutwardReply,
+    finalReplyText: keepFirstOutwardReply
+      ? params.firstAttemptOutcome.replyText
+      : retryFallbackReplyText,
+  };
 }
 
 export function shouldParseCognitionEnvelopeForInbound(params: {
@@ -2284,16 +2367,27 @@ export async function handle43ChatEvent(
           log(`43chat[${accountId}]: cognition envelope recovered on retry attempt=${retryAttempt}`);
         }
       } else {
-        result = retryResult;
-        cognitionEnvelope = null;
-        finalReplyText = inbound.chatType === "group"
-          ? resolveGroupFinalReplyText(retryResult.finalText)
-          : retryResult.finalText.trim();
-        log(
-          retryForEnvelope
-            ? `43chat[${accountId}]: cognition envelope still missing after retry; keeping first outward reply to avoid blocking message`
-            : `43chat[${accountId}]: final reply still empty after retry; falling back to dispatch outcome classification`,
-        );
+        const retryFallback = resolveRetryFallbackForMissingEnvelope({
+          chatType: inbound.chatType,
+          retryFinalText: retryResult.finalText,
+          retryForEnvelope,
+          firstAttemptOutcome,
+        });
+        if (retryFallback.keepFirstOutwardReply) {
+          result = firstResult;
+          cognitionEnvelope = null;
+          finalReplyText = retryFallback.finalReplyText;
+          log(`43chat[${accountId}]: cognition envelope still missing after retry; keeping first outward reply to avoid blocking message`);
+        } else {
+          result = retryResult;
+          cognitionEnvelope = null;
+          finalReplyText = retryFallback.finalReplyText;
+          log(
+            retryForEnvelope
+              ? `43chat[${accountId}]: cognition envelope still missing after retry; falling back to latest outward reply`
+              : `43chat[${accountId}]: final reply still empty after retry; falling back to dispatch outcome classification`,
+          );
+        }
       }
     }
 
