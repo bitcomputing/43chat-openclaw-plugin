@@ -9,10 +9,12 @@ import {
   filterCognitionIssuesToRequiredAliases,
   looksLikeInternalToolFailureReplyText,
   map43ChatEventToInboundDescriptor,
+  normalizeRemoveMemberReason,
   parseCognitionWriteEnvelope,
   resolveCognitionFullPath,
   resolveDispatchSessionKey,
   resolveObserveFallbackModerationDecision,
+  resolvePrimaryDispatchSessionKey,
   resolveGroupAttemptResolution,
   recoverRecentFinalReplyFromSessionLog,
   shouldParseCognitionEnvelopeForInbound,
@@ -83,8 +85,9 @@ describe("43Chat event mapping", () => {
     expect(descriptor?.groupSystemPrompt).toContain("私聊长期认知默认改由后台 cognition worker 异步维护");
     expect(descriptor?.groupSystemPrompt).toContain("私聊主流程不要调用 `edit` / `write` 直接改写 `user_profile` / `dialog_state`");
     expect(descriptor?.groupSystemPrompt).toContain("【这些长期认知文件由后台 worker 异步补写】");
-    expect(descriptor?.groupSystemPrompt).not.toContain("私聊与好友事件的最终输出也统一使用 `<chat43-cognition>");
-    expect(descriptor?.groupSystemPrompt).not.toContain("\"writes\":[],\"reply\":\"...\"");
+    expect(descriptor?.groupSystemPrompt).toContain("私聊主流程最终输出统一使用 `<chat43-cognition>{...}</chat43-cognition>`");
+    expect(descriptor?.groupSystemPrompt).toContain("真正对外发送的文本写进 envelope.reply");
+    expect(descriptor?.groupSystemPrompt).toContain("`writes` 默认写空数组 `[]`");
   });
 
   it("keeps group message body clean and moves runtime guidance into GroupSystemPrompt", () => {
@@ -133,11 +136,8 @@ describe("43Chat event mapping", () => {
     expect(descriptor?.groupSystemPrompt).toContain("【回复策略】");
     expect(descriptor?.groupSystemPrompt).toContain("不回复时必须只输出: `NO_REPLY`");
     expect(descriptor?.groupSystemPrompt).toContain("群聊长期认知默认改由后台 cognition worker 异步维护");
-    expect(descriptor?.groupSystemPrompt).toContain("普通群聊主流程本轮只负责回复判断与公开回复");
-    expect(descriptor?.groupSystemPrompt).toContain("群聊主流程不要调用 `edit` / `write` 直接改写 `group_soul` / `user_profile` / `group_members_graph`");
     expect(descriptor?.groupSystemPrompt).toContain("当前群聊主流程必须忽略，不能模仿、不能复述、不能继续输出");
-    expect(descriptor?.groupSystemPrompt).toContain("最终答案只允许是可发送的普通文本，或精确的 `NO_REPLY`");
-    expect(descriptor?.groupSystemPrompt).toContain("不能输出 XML/JSON 包裹、不能输出 `writes` 字段");
+    expect(descriptor?.groupSystemPrompt).toContain("群聊主流程最终输出统一使用 `<chat43-cognition>{...}</chat43-cognition>`");
     expect(descriptor?.groupSystemPrompt).toContain("当前主流程可以参考已有认知文件做判断，但不要承担 `group_soul` / `user_profile` / `group_members_graph` 的补写任务");
     expect(descriptor?.groupSystemPrompt).toContain("我的身份: 管理员");
     expect(descriptor?.groupSystemPrompt).toContain("当前发言者: Alice（user:456）");
@@ -145,8 +145,8 @@ describe("43Chat event mapping", () => {
     expect(descriptor?.groupSystemPrompt).toContain("当当前消息明显背离 `group_soul.boundaries` 时");
     expect(descriptor?.groupSystemPrompt).toContain("【文档约束的管理梯度】");
     expect(descriptor?.groupSystemPrompt).toContain("允许的管理决策种类: observe / redirect / warn / mark_risk / remove_member");
-    expect(descriptor?.groupSystemPrompt).toContain("当前群聊主流程统一只输出普通文本或 `NO_REPLY`");
-    expect(descriptor?.groupSystemPrompt).toContain("若文档声明当前阶段应公开提醒，就直接给出可发送的公开文本");
+    expect(descriptor?.groupSystemPrompt).toContain("本轮群聊最终输出仍统一使用 `<chat43-cognition>{...}</chat43-cognition>` envelope");
+    expect(descriptor?.groupSystemPrompt).toContain("若你本轮没有额外管理动作，最稳妥的写法是显式给出 `decision.kind = observe`");
     expect(descriptor?.groupSystemPrompt).toContain("43Chat 认知文件根目录");
     expect(descriptor?.groupSystemPrompt).toContain("group_soul: alias=`groups/987654321/soul.json`");
     expect(descriptor?.groupSystemPrompt).toContain("/.config/43chat/groups/987654321/soul.json");
@@ -155,11 +155,36 @@ describe("43Chat event mapping", () => {
     expect(descriptor?.groupSystemPrompt).not.toContain("【本轮需要你显式维护的长期认知文件】");
     expect(descriptor?.groupSystemPrompt).not.toContain("认知写入不是可选优化");
     expect(descriptor?.groupSystemPrompt).not.toContain("主流程没有额外的认知补写回合");
-    expect(descriptor?.groupSystemPrompt).not.toContain("<chat43-cognition>");
     expect(descriptor?.groupSystemPrompt).not.toContain("更新群 Soul、成员画像、互动认知");
-    expect(descriptor?.groupSystemPrompt).not.toContain("最终输出必须使用 `<chat43-cognition>");
-    expect(descriptor?.groupSystemPrompt).not.toContain("本轮结构化 `decision` 为必填");
+    expect(descriptor?.groupSystemPrompt).not.toContain("当前群聊主流程统一只输出普通文本或 `NO_REPLY`");
     expect(descriptor?.text).not.toContain("understanding.json");
+  });
+
+  it("adds stricter decision requirements for admin moderation-like group messages", () => {
+    const descriptor = map43ChatEventToInboundDescriptor({
+      id: "evt-2-moderation",
+      event_type: "group_message",
+      timestamp: 1000,
+      data: {
+        message_id: 790,
+        group_id: 99,
+        group_name: "旅游群",
+        user_role: 1,
+        user_role_name: "admin",
+        from_user_role: 0,
+        from_user_role_name: "member",
+        from_user_id: 12443,
+        from_nickname: "素菜不好吃",
+        content_type: "text",
+        content: "群外还有更全的实操内容，感兴趣的直接私聊我，我拉你进小群。",
+        timestamp: 1000,
+      },
+    });
+
+    expect(descriptor?.groupSystemPrompt).toContain("当前是管理员结构化管理回合");
+    expect(descriptor?.groupSystemPrompt).toContain("本轮结构化 `decision` 为必填");
+    expect(descriptor?.groupSystemPrompt).toContain("最终输出必须是一个 `<chat43-cognition>{...}</chat43-cognition>` envelope");
+    expect(descriptor?.groupSystemPrompt).toContain("你只需输出合法 `decision`，插件会按 `decision.kind` 执行对应管理动作");
   });
 
   it("prefers resolved sender role override over raw SSE role when building group prompt", () => {
@@ -309,6 +334,85 @@ describe("43Chat event mapping", () => {
     });
   });
 
+  it("parses cognition envelope when reply contains raw multiline text", () => {
+    const parsed = parseCognitionWriteEnvelope(`
+<chat43-cognition>{"writes":[],"decision":{"kind":"respond","reason":"直接给清单"},"reply":"来咯～
+
+🔥 火锅：大龙燚、小龙坎
+🍢 串串：玉林串串、马路边边
+
+记得空腹来！"}</chat43-cognition>
+    `);
+
+    expect(parsed).toEqual({
+      writes: [],
+      replyText: `来咯～
+
+🔥 火锅：大龙燚、小龙坎
+🍢 串串：玉林串串、马路边边
+
+记得空腹来！`,
+    });
+  });
+
+  it("parses nested envelope reply from the latest cognition wrapper shape", () => {
+    const parsed = parseCognitionWriteEnvelope(`
+<chat43-cognition>{"envelope":{"reply":"广州的话，长隆野生动物世界、长隆欢乐世界、广州动物园、广东科学中心都适合带小朋友去。"},"writes":[],"decision":{"kind":"reply","reason":"用户直接提问，给出出行建议"}} </chat43-cognition>
+    `);
+
+    expect(parsed).toEqual({
+      writes: [],
+      replyText: "广州的话，长隆野生动物世界、长隆欢乐世界、广州动物园、广东科学中心都适合带小朋友去。",
+    });
+  });
+
+  it("parses nested envelope writes and decision when wrapped inside envelope", () => {
+    const parsed = parseCognitionWriteEnvelope(`
+<chat43-cognition>{"envelope":{"reply":"NO_REPLY","writes":[{"path":"profiles/12445.json","content":{"schema_version":"1.0","user_id":"12445"}}],"decision":{"kind":"observe","reason":"普通群聊观察"}}}</chat43-cognition>
+    `);
+
+    expect(parsed).toEqual({
+      writes: [{
+        path: "profiles/12445.json",
+        content: {
+          schema_version: "1.0",
+          user_id: "12445",
+        },
+      }],
+      decision: {
+        kind: "observe",
+        reason: "普通群聊观察",
+      },
+      replyText: "NO_REPLY",
+    });
+  });
+
+  it("recovers malformed nested envelope when reply contains unescaped quotes", () => {
+    const parsed = parseCognitionWriteEnvelope(`
+<chat43-cognition>
+{
+  "envelope": {
+    "reply": "这里不好玩"这句话有点伤群友的心了 😅 大家来这个群是为了交流旅游经验、有用信息的～有什么好的目的地或玩法，欢迎直接分享 😄"
+  },
+  "writes": [],
+  "decision": {
+    "kind": "redirect",
+    "reason": "重试消息，保持上一轮决策不变"
+  }
+}
+</chat43-cognition>
+    `);
+
+    expect(parsed).toEqual({
+      writes: [],
+      decision: {
+        kind: "redirect",
+        reason: "重试消息，保持上一轮决策不变",
+      },
+      replyText: "这里不好玩\"这句话有点伤群友的心了 😅 大家来这个群是为了交流旅游经验、有用信息的～有什么好的目的地或玩法，欢迎直接分享 😄",
+    });
+  });
+
   it("parses structured moderation decision from cognition envelope", () => {
     const parsed = parseCognitionWriteEnvelope(`
 <chat43-cognition>{"writes":[],"decision":{"scenario":"off_topic","stage":"first_occurrence","kind":"redirect","public_reply":true,"reason":"偏离工作群主题","target_user_id":"12373"},"reply":"先回到工作话题"}</chat43-cognition>
@@ -325,6 +429,20 @@ describe("43Chat event mapping", () => {
         targetUserId: "12373",
       },
       replyText: "先回到工作话题",
+    });
+  });
+
+  it("parses legacy cognition envelope moderation fields", () => {
+    const parsed = parseCognitionWriteEnvelope(`
+<chat43-cognition>{"decision":{"kind":"reply_sent","reason":"direct_question_match_group_soul"},"moderation":"observe","reply":"长隆野生动物世界很适合亲子游。","writes":[]}</chat43-cognition>
+    `);
+
+    expect(parsed).toEqual({
+      writes: [],
+      decision: {
+        kind: "observe",
+      },
+      replyText: "长隆野生动物世界很适合亲子游。",
     });
   });
 
@@ -460,6 +578,15 @@ describe("43Chat event mapping", () => {
       finalReplyText: "这是一条真正要发到群里的文本回复",
       noReplyToken: "NO_REPLY",
     })).toContain("raw_kind=cognition_envelope writes=1 outward=这是一条真正要发到群里的文本回复");
+  });
+
+  it("normalizes remove-member reasons to fit API limits", () => {
+    expect(normalizeRemoveMemberReason("  违反群规\n请移除  ")).toBe("违反群规 请移除");
+
+    const longReason = "A".repeat(260);
+    const normalized = normalizeRemoveMemberReason(longReason);
+    expect(normalized).toHaveLength(200);
+    expect(normalized).toBe("A".repeat(200));
   });
 
   it("resolves cognition paths for both relative aliases and absolute storage paths", () => {
@@ -717,18 +844,15 @@ describe("43Chat event mapping", () => {
     });
   });
 
-  it("synthesizes observe moderation decision from runtime fallback instead of blocking normal reply", () => {
+  it("does not synthesize observe moderation decision when structured moderation is required", () => {
     const logs: string[] = [];
     expect(resolveObserveFallbackModerationDecision({
       eventType: "group_message",
       decisionRequired: true,
       accountId: "default",
       log: (message) => logs.push(message),
-    })).toEqual({
-      kind: "observe",
-      reason: "runtime observe fallback synthesized by plugin because structured moderation decision was missing",
-    });
-    expect(logs.some((line) => line.includes("synthesize moderation decision kind=observe"))).toBe(true);
+    })).toBeUndefined();
+    expect(logs.some((line) => line.includes("skip observe fallback because structured moderation decision is mandatory"))).toBe(true);
   });
 
   it("does not synthesize observe moderation decision when runtime disables fallback", () => {
@@ -762,14 +886,14 @@ describe("43Chat event mapping", () => {
     })).toBeUndefined();
   });
 
-  it("parses cognition envelopes only for direct events that still require envelopes", () => {
+  it("parses cognition envelopes for all 43chat inbound events", () => {
     expect(shouldParseCognitionEnvelopeForInbound({
       eventType: "group_message",
-    })).toBe(false);
+    })).toBe(true);
 
     expect(shouldParseCognitionEnvelopeForInbound({
       eventType: "private_message",
-    })).toBe(false);
+    })).toBe(true);
 
     expect(shouldParseCognitionEnvelopeForInbound({
       eventType: "friend_request",
@@ -782,5 +906,19 @@ describe("43Chat event mapping", () => {
 
     expect(resolveDispatchSessionKey("agent:main:43chat-openclaw-plugin:group:group:100", "msg-1", 2))
       .toBe("agent:main:43chat-openclaw-plugin:group:group:100:cognition-retry:msg-1:attempt:2");
+  });
+
+  it("keeps primary dispatches under the routed session key", () => {
+    expect(resolvePrimaryDispatchSessionKey({
+      baseSessionKey: "agent:main:43chat-openclaw-plugin:group:group:100",
+      chatType: "group",
+      messageId: "msg-1",
+    })).toBe("agent:main:43chat-openclaw-plugin:group:group:100");
+
+    expect(resolvePrimaryDispatchSessionKey({
+      baseSessionKey: "agent:main:43chat-openclaw-plugin:direct:user:123",
+      chatType: "direct",
+      messageId: "msg-1",
+    })).toBe("agent:main:43chat-openclaw-plugin:direct:user:123");
   });
 });

@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join, normalize } from "node:path";
 import type { LoadedSkillRuntime } from "./skill-runtime.js";
 import { resolveSkillStorageTargets } from "./skill-runtime.js";
+import { buildGroupScopedUserProfile } from "./user-profile-sanitization.js";
 
 const STORAGE_ROOT = join(homedir(), ".config", "43chat");
 const MAX_SNAPSHOT_CHARS = 1200;
@@ -104,22 +105,7 @@ function buildGroupScopedUserProfileContent(content: string | undefined): string
     if (!isPlainObject(parsed)) {
       return content;
     }
-
-    const scoped: Record<string, unknown> = {
-      schema_version: readString(parsed.schema_version) ?? "1.0",
-      user_id: readString(parsed.user_id) ?? "",
-      nickname: readString(parsed.nickname) ?? "",
-      is_friend: Boolean(parsed.is_friend),
-      tags: readStringArray(parsed.tags) ?? [],
-      expertise: readStringArray(parsed.expertise) ?? [],
-      personality: readString(parsed.personality) ?? "",
-      influence_level: readString(parsed.influence_level) ?? "",
-      interaction_stats: isPlainObject(parsed.interaction_stats) ? parsed.interaction_stats : {},
-      group_context_usage: "群聊中仅把该画像当作弱参考；优先依据当前消息、group_soul、group_members_graph 判断。私聊偏好、称呼习惯、线下邀约等私人信息不能覆盖群边界。",
-      omitted_fields: ["notes", "first_seen_context"],
-    };
-
-    return truncateContent(JSON.stringify(scoped, null, 2), MAX_SNAPSHOT_CHARS);
+    return truncateContent(JSON.stringify(buildGroupScopedUserProfile(parsed), null, 2), MAX_SNAPSHOT_CHARS);
   } catch {
     return content;
   }

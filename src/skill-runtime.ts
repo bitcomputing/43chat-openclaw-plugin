@@ -126,6 +126,14 @@ export type ResolvedSkillRuntimeModerationPolicy = {
   allowed_decision_kinds: SkillRuntimeModerationDecisionKind[];
 };
 
+const MODERATION_SIGNAL_PATTERNS = [
+  /(?:广告|引流|导流|私聊|加我|加vx|加v|微信|v信|vx|薇信|二维码|拉你进群|拉你进小群|资源群|小群|渠道|名额|返利|代理|推广)/iu,
+  /(?:踢(?:了|掉|出(?:去)?)|移出|清理|封禁|拉黑|禁言|处理一下|警告|处罚|违规|举报|投诉)/iu,
+  /(?:骚扰|辱骂|人身攻击|喷人|刷屏|连发|spam|垃圾消息|垃圾广告)/iu,
+  /(?:滚|废物|傻[逼比币]|脑残|去死|骗子|妈的|他妈|尼玛|sb)\b/iu,
+  /(?:https?:\/\/|www\.)/iu,
+] as const;
+
 export type SkillRuntimePromptBlock = {
   title?: string;
   lines: string[];
@@ -1457,4 +1465,43 @@ export function resolveSkillModerationPolicy(
       ...allowedDecisionKinds,
     ])),
   };
+}
+
+export function shouldRequireStructuredModerationDecisionForRole(params: {
+  runtime: LoadedSkillRuntime;
+  eventType: string;
+  roleName?: string;
+  messageText?: string;
+}): boolean {
+  if (params.eventType !== "group_message") {
+    return false;
+  }
+
+  const roleName = params.roleName?.trim();
+  if (!roleName) {
+    return false;
+  }
+
+  const moderationPolicy = resolveSkillModerationPolicy(params.runtime, params.eventType);
+  if (
+    !moderationPolicy.enforcement.enabled
+    || !moderationPolicy.enforcement.require_decision
+  ) {
+    return false;
+  }
+
+  if (!moderationPolicy.enforcement.roles.includes(roleName)) {
+    return false;
+  }
+
+  return looksLikeModerationSignal(params.messageText);
+}
+
+export function looksLikeModerationSignal(messageText?: string): boolean {
+  const text = messageText?.replace(/\s+/gu, " ").trim() ?? "";
+  if (!text) {
+    return false;
+  }
+
+  return MODERATION_SIGNAL_PATTERNS.some((pattern) => pattern.test(text));
 }

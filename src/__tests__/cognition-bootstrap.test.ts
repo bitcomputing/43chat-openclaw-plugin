@@ -506,6 +506,54 @@ describe("43Chat cognition bootstrap", () => {
     expect((normalizedGraph.members as Record<string, any>)["12446"].role).toBe("contributor");
   });
 
+  it("sanitizes cross-group role labels and private details from global user_profile writes", () => {
+    const dir = mkdtempSync(join(tmpdir(), "43chat-bootstrap-"));
+    tempDirs.push(dir);
+    const event = {
+      id: "evt-bootstrap-sanitize-global-profile",
+      event_type: "group_message" as const,
+      timestamp: 1712448000000,
+      data: {
+        message_id: 8101,
+        group_id: 68,
+        group_name: "闲聊群",
+        from_user_id: 12373,
+        from_nickname: "下雪啦",
+        content_type: "text",
+        content: "先看一下清洗逻辑。",
+        user_role: 0,
+        user_role_name: "member",
+        from_user_role: 0,
+        from_user_role_name: "member",
+        timestamp: 1712448000000,
+      },
+    };
+
+    ensureSkillCognitionBootstrap({ baseDir: dir, event });
+
+    const normalizedProfile = normalizeSkillCognitionWriteContent({
+      baseDir: dir,
+      event,
+      path: join(dir, "profiles/12373.json"),
+      content: {
+        schema_version: "1.0",
+        user_id: "12373",
+        nickname: "下雪啦",
+        is_friend: true,
+        tags: ["群主", "秩序维护者", "户外爱好者"],
+        expertise: ["群管理", "摄影"],
+        personality: "亲切；称呼我小贝贝",
+        notes: "欢迎新成员流程自然熟练；当前在成都探索美食；想约线下火锅",
+      },
+    });
+
+    expect(normalizedProfile.is_friend).toBe(true);
+    expect(normalizedProfile.tags).toEqual(["户外爱好者"]);
+    expect(normalizedProfile.expertise).toEqual(["摄影"]);
+    expect(normalizedProfile.personality).toBe("亲切");
+    expect(normalizedProfile.notes).toBe("");
+  });
+
   it("filters volatile short-term phrases from long-term cognition writes", () => {
     const dir = mkdtempSync(join(tmpdir(), "43chat-bootstrap-"));
     tempDirs.push(dir);

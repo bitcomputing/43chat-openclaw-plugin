@@ -6,6 +6,7 @@ import { map43ChatEventToInboundDescriptor } from "../bot.js";
 import { buildSkillEventContext } from "../skill-event-context.js";
 import {
   load43ChatSkillRuntime,
+  shouldRequireStructuredModerationDecisionForRole,
   resolveSkillCognitionPolicy,
   resolveSkillModerationPolicy,
   resolveSkillReplyDelivery,
@@ -234,6 +235,7 @@ describe("43Chat skill runtime", () => {
       groupId: "1001",
       groupName: "Runtime 测试群",
       roleName: "管理员",
+      messageText: "有人刷广告了，想进资源群的私聊我。",
       userId: "2001",
       senderName: "Alice",
       senderRoleName: "成员",
@@ -312,6 +314,7 @@ describe("43Chat skill runtime", () => {
       groupId: "1001",
       groupName: "Runtime 测试群",
       roleName: "管理员",
+      messageText: "有人刷广告了，想进资源群的私聊我。",
       userId: "2001",
       senderName: "Alice",
       senderRoleName: "成员",
@@ -320,7 +323,8 @@ describe("43Chat skill runtime", () => {
     expect(context.prompt).toContain("【认知写入策略】");
     expect(context.prompt).toContain("topic_persistence.group_soul = filtered");
     expect(context.prompt).toContain("群聊长期认知默认改由后台 cognition worker 异步维护");
-    expect(context.prompt).toContain("普通群聊主流程本轮只负责回复判断与公开回复");
+    expect(context.prompt).toContain("当前是管理员结构化管理回合");
+    expect(context.prompt).toContain("群聊主流程最终输出统一使用 `<chat43-cognition>{...}</chat43-cognition>`");
     expect(context.prompt).toContain("当前主流程可以参考已有认知文件做判断，但不要承担 `group_soul` / `user_profile` / `group_members_graph` 的补写任务");
     expect(context.prompt).toContain("【这些长期认知文件由后台 worker 异步补写】");
     expect(context.prompt).not.toContain("【本轮需要你显式维护的长期认知文件】");
@@ -561,6 +565,7 @@ describe("43Chat skill runtime", () => {
       groupId: "1001",
       groupName: "项目工作群",
       roleName: "管理员",
+      messageText: "群外还有更全资料，想要的私聊我，我拉你进小群。",
       userId: "2001",
       senderName: "Alice",
       senderRoleName: "成员",
@@ -570,8 +575,36 @@ describe("43Chat skill runtime", () => {
     expect(context.prompt).toContain("允许的管理决策种类: observe / redirect / warn / mark_risk / remove_member");
     expect(context.prompt).toContain("off_topic.repeat_occurrence => warn / public_reply=false");
     expect(context.prompt).toContain("重复偏题时不公开陪聊");
-    expect(context.prompt).toContain("当前群聊主流程统一只输出普通文本或 `NO_REPLY`");
-    expect(context.prompt).toContain("管理动作的判断依据仍然来自 runtime 文档");
-    expect(context.prompt).not.toContain("本轮结构化 `decision` 为必填");
+    expect(context.prompt).toContain("本轮结构化 `decision` 为必填");
+    expect(context.prompt).toContain("最终输出必须是一个 `<chat43-cognition>{...}</chat43-cognition>` envelope");
+    expect(context.prompt).toContain("`writes` 可以为空数组 `[]`");
+    expect(context.prompt).toContain("你只需输出合法 `decision`，插件会按 `decision.kind` 执行对应管理动作");
+    expect(context.prompt).toContain("不要输出“我没有这个工具”");
+    expect(context.prompt).not.toContain("当前群聊主流程统一只输出普通文本或 `NO_REPLY`");
+  });
+
+  it("only requires structured moderation decisions for admin moderation signals", () => {
+    const runtime = load43ChatSkillRuntime({
+      channels: {
+        "43chat-openclaw-plugin": {
+          skillDocsDir: "/tmp/43chat-test-no-runtime",
+          skillRuntimePath: "/tmp/43chat-test-no-runtime/skill.runtime.json",
+        },
+      },
+    } as any);
+
+    expect(shouldRequireStructuredModerationDecisionForRole({
+      runtime,
+      eventType: "group_message",
+      roleName: "管理员",
+      messageText: "@Dusty 你在干什么",
+    })).toBe(false);
+
+    expect(shouldRequireStructuredModerationDecisionForRole({
+      runtime,
+      eventType: "group_message",
+      roleName: "管理员",
+      messageText: "这边还有一份站外清单，想要完整版的私聊我发你。",
+    })).toBe(true);
   });
 });

@@ -252,7 +252,9 @@
           "title": "认知写入执行要求",
           "lines": [
             "群聊长期认知默认由后台 cognition worker 异步维护；worker 会读取本地 models/auth 配置并批量补写 `group_soul` / `user_profile` / `group_members_graph`",
-            "普通群聊主流程只负责回复判断与必要管理动作，不要为了补长期认知而延迟回复或输出结构化 envelope",
+            "群聊主流程最终输出统一使用 `<chat43-cognition>{...}</chat43-cognition>`；不要输出裸文本、不要只输出 `<final>...</final>`、不要输出裸 `NO_REPLY`",
+            "真正对外发送的文本写进 envelope.reply；若当前消息不需要公开回复，就把 envelope.reply 写成 `{no_reply_token}`",
+            "`writes` 默认写空数组 `[]`；群聊长期认知继续由后台 worker 异步补写，不要在主流程里承担 `group_soul` / `user_profile` / `group_members_graph` 的补写任务",
             "群聊主流程不要调用 `edit` / `write` 直接改写 `group_soul` / `user_profile` / `group_members_graph`；新增观察交给后台 worker 归并落库",
             "当前主流程可以参考已有认知文件做判断，但长期沉淀由后台 batch 负责写回文档",
             "本轮观察与管理决策仍由插件写入 `group_decision_log`，供后续主流程和 worker 共同参考"
@@ -266,7 +268,7 @@
             "如果命中 `moderation_policy` 里的场景，按 runtime 声明的 `scenario + stage + decision.kind` 执行，不要自创管理梯度",
             "垃圾广告、营销导流、骚扰、人身攻击、反复刷屏，属于需要你参与判断的管理事件，即使当前消息没有@你",
             "允许结合 `group_state`、`group_members_graph`、`user_profile` 中的最近记录判断是否警告、移除成员、或仅记录观察",
-            "如果最终判断是管理动作优先，可以不发普通文本，但必须完成认知更新和决策记录"
+            "如果最终判断是管理动作优先，可以不公开回复，但仍需返回合法 envelope，并让插件完成决策记录"
           ]
         },
         {

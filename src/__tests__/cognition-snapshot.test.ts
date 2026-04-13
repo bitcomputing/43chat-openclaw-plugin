@@ -67,15 +67,17 @@ describe("43Chat cognition snapshot", () => {
         user_id: "12373",
         nickname: "下雪啦",
         is_friend: true,
-        tags: ["闲聊型", "户外爱好者"],
-        expertise: [],
+        tags: ["群主", "闲聊型", "户外爱好者"],
+        expertise: ["群管理", "摄影"],
         personality: "直接、亲切、外向",
         influence_level: "",
         interaction_stats: {
           total_interactions: 12,
+          last_interaction: "2026-04-13T10:00:00.000Z",
+          sentiment_trend: "positive",
         },
         first_seen_context: "私聊",
-        notes: "喜欢爬香山，想让我陪她去，称呼我小贝贝",
+        notes: "喜欢爬香山；想让我陪她去；称呼我小贝贝；当前在成都探索美食",
       }),
     }], {
       eventType: "group_message",
@@ -84,9 +86,15 @@ describe("43Chat cognition snapshot", () => {
 
     expect(entries[0]?.content).toContain('"group_context_usage"');
     expect(entries[0]?.content).toContain('"tags": [');
+    expect(entries[0]?.content).not.toContain('"is_friend":');
+    expect(entries[0]?.content).not.toContain("群主");
+    expect(entries[0]?.content).not.toContain("群管理");
     expect(entries[0]?.content).not.toContain("小贝贝");
     expect(entries[0]?.content).not.toContain("香山");
+    expect(entries[0]?.content).not.toContain("成都");
     expect(entries[0]?.content).not.toContain('"first_seen_context":');
+    expect(entries[0]?.content).not.toContain('"last_interaction":');
+    expect(entries[0]?.content).toContain('"sentiment_trend": "positive"');
     expect(entries[0]?.content).toContain('"omitted_fields"');
   });
 });

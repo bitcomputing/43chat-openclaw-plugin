@@ -14,6 +14,7 @@ import {
   resolveSkillReplyPolicy,
   resolveSkillDocPaths,
   resolveSkillStorageTargets,
+  shouldRequireStructuredModerationDecisionForRole,
   type SkillRuntimePromptBlock,
   type SkillRuntimeRoleDefinition,
   type SkillRuntimeEventProfile,
@@ -24,6 +25,7 @@ type BuildSkillEventContextParams = {
   eventType: string;
   accountId?: string;
   roleName?: string;
+  messageText?: string;
   groupId?: string;
   groupName?: string;
   userId?: string;
@@ -171,13 +173,17 @@ function renderRoleDefinition(params: {
   return lines;
 }
 
-function shouldForceCognitionEnvelopeForDirectEvent(eventType: string): boolean {
+function shouldRequireInlineCognitionWritesForEvent(eventType: string): boolean {
   return eventType === "friend_request"
     || eventType === "friend_accepted";
 }
 
 function shouldUseAsyncCognitionWorker(eventType: string): boolean {
   return eventType === "private_message" || eventType === "group_message";
+}
+
+function shouldUseUnifiedCognitionEnvelope(_eventType: string): boolean {
+  return true;
 }
 
 export function resolvePromptRoleName(params: {
@@ -234,6 +240,12 @@ export function buildSkillEventContext(params: BuildSkillEventContextParams): Bu
   const effectiveRoleName = resolvePromptRoleName({
     roleName: params.roleName,
     snapshot,
+  });
+  const moderationDecisionRequired = shouldRequireStructuredModerationDecisionForRole({
+    runtime,
+    eventType: params.eventType,
+    roleName: effectiveRoleName,
+    messageText: params.messageText,
   });
   const promptValues = {
     account_id: params.accountId,
@@ -308,9 +320,18 @@ export function buildSkillEventContext(params: BuildSkillEventContextParams): Bu
     lines.push("【文档约束的管理梯度】");
     lines.push("- 管理判断不靠插件硬编码；若命中管理场景，必须遵守 runtime 里声明的场景梯度与决策种类");
     lines.push(`- 允许的管理决策种类: ${moderationPolicy.allowed_decision_kinds.join(" / ")}`);
-    lines.push("- 当前群聊主流程统一只输出普通文本或 `NO_REPLY`；不要为了记录管理判断输出任何结构化 envelope");
-    lines.push(`- 若文档声明当前阶段应公开提醒，就直接给出可发送的公开文本；若文档声明当前阶段不应公开回复，就直接输出 \`${replyPolicy.no_reply_token}\``);
-    lines.push("- 管理动作的判断依据仍然来自 runtime 文档；只是最终对外输出不再要求结构化 `decision` 字段");
+    if (moderationDecisionRequired) {
+      lines.push("- 本轮结构化 `decision` 为必填；最终输出必须是一个 `<chat43-cognition>{...}</chat43-cognition>` envelope");
+      lines.push(`- envelope.reply 承载真正对外发送的文本；若当前阶段不应公开回复，reply 必须写成 \`${replyPolicy.no_reply_token}\``);
+      lines.push("- envelope.decision 必须显式给出本轮管理判断；若命中场景，还要补齐 `scenario` / `stage` 并与 runtime 梯度一致");
+      lines.push("- 群聊长期认知仍由后台 worker 异步维护；这里的 envelope 只负责 `reply + decision`，`writes` 可以为空数组 `[]`");
+      lines.push("- 即使上文出现 `chat43_remove_group_member(...)` 之类动作名，也不要把它当成你必须亲自调用的工具；你只需输出合法 `decision`，插件会按 `decision.kind` 执行对应管理动作");
+      lines.push("- 对需要移除成员的场景，直接输出 `decision.kind = remove_member`；`target_user_id` 留空时插件默认作用于当前发言者");
+    } else {
+      lines.push("- 本轮群聊最终输出仍统一使用 `<chat43-cognition>{...}</chat43-cognition>` envelope；不要退化成裸文本或裸 `NO_REPLY`");
+      lines.push(`- 若当前只是正常聊天，把真正对外发送的文本写进 envelope.reply；若本轮不公开回复，就把 reply 写成 \`${replyPolicy.no_reply_token}\``);
+      lines.push("- 若你本轮没有额外管理动作，最稳妥的写法是显式给出 `decision.kind = observe`；这样插件与日志都走统一结构");
+    }
 
     Object.entries(moderationPolicy.scenarios)
       .filter(([, scenario]) => scenario.enabled)
@@ -350,7 +371,7 @@ export function buildSkillEventContext(params: BuildSkillEventContextParams): Bu
     lines.push("");
   }
   lines.push(...formatAliasedToolCalls("【先读取这些认知文件】", readTargets));
-  if (shouldForceCognitionEnvelopeForDirectEvent(params.eventType)) {
+  if (shouldRequireInlineCognitionWritesForEvent(params.eventType)) {
     lines.push(...formatAliasedToolCalls("【本轮需要你显式维护的长期认知文件】", modelWriteTargets.filter((entry) => !entry.path.endsWith(".jsonl"))));
   } else if (shouldUseAsyncCognitionWorker(params.eventType) && modelWriteTargets.length > 0) {
     lines.push(...formatAliasedToolCalls("【这些长期认知文件由后台 worker 异步补写】", modelWriteTargets.filter((entry) => !entry.path.endsWith(".jsonl"))));
@@ -388,7 +409,7 @@ export function buildSkillEventContext(params: BuildSkillEventContextParams): Bu
   lines.push(`- topic_persistence.decision_log = ${cognitionPolicy.topic_persistence.decision_log}`);
   lines.push("");
   lines.push("【认知写入执行要求】");
-  if (shouldForceCognitionEnvelopeForDirectEvent(params.eventType)) {
+  if (shouldRequireInlineCognitionWritesForEvent(params.eventType)) {
     lines.push("- 插件不会替你自动补这类直接事件的长期认知；如果本轮需要沉淀稳定结论，由你在主流程显式写入");
     lines.push("- 本轮要写的长期认知，必须和回复决策一起在这一次最终输出里完成");
     lines.push("- 最终输出统一使用 `<chat43-cognition>{\"writes\":[...],\"reply\":\"...\"}</chat43-cognition>`；不要输出裸文本、不要只输出 `<final>...</final>`");
@@ -396,25 +417,42 @@ export function buildSkillEventContext(params: BuildSkillEventContextParams): Bu
     lines.push(`- 如果本轮不回复，也要输出 envelope，且 \`reply\` 必须写为 \`${replyPolicy.no_reply_token}\``);
   } else if (params.eventType === "private_message") {
     lines.push("- 私聊长期认知默认改由后台 cognition worker 异步维护：它会读取本地模型配置、按批次归并私聊消息，再写回 `user_profile` / `dialog_state`");
-    lines.push("- 因此普通私聊主流程本轮只负责回复判断与文本回复；不要为了补长期认知而输出任何结构化 envelope");
+    lines.push("- 私聊主流程最终输出统一使用 `<chat43-cognition>{...}</chat43-cognition>`；不要输出裸文本、不要只输出 `<final>...</final>`、不要输出裸 `NO_REPLY`");
+    lines.push(`- 真正对外发送的文本写进 envelope.reply；若当前消息不需要回复，就把 envelope.reply 写成 \`${replyPolicy.no_reply_token}\``);
+    lines.push("- `writes` 默认写空数组 `[]`；私聊长期认知继续由后台 worker 异步补写，不要在主流程里承担 `user_profile` / `dialog_state` 的补写任务");
     lines.push("- 私聊主流程不要调用 `edit` / `write` 直接改写 `user_profile` / `dialog_state`；新增观察交给后台 worker 归并落库");
-    lines.push(`- 如果当前消息不需要回复，直接输出 \`${replyPolicy.no_reply_token}\`；如果需要回复，直接输出普通文本`);
-    lines.push("- 最终答案只允许是可发送的普通文本，或精确的 `NO_REPLY`；不能输出 XML/JSON 包裹、不能输出 `writes` 字段、不能输出工具失败提示");
+    lines.push("- 如果上下文里出现结构化 envelope、`read` / `edit` / `write` 工具轨迹，或 `⚠️ 📝 Edit...failed` 之类内部内容，当前私聊主流程必须忽略，不能模仿、不能复述、不能继续输出");
+    lines.push("- 不要输出“我没有这个工具”“插件会处理”“this is a retry”之类说明文本；真正对外发送的只有 envelope.reply");
     lines.push("- 即使当前私聊画像或对话状态仍为空，也不要把主流程改成补文档回合；后台 worker 会继续补写长期认知");
     lines.push("- 当前主流程可以参考已有认知文件做判断，但不要承担 `user_profile` / `dialog_state` 的补写任务");
     lines.push("- 本轮观察与决策仍会进入 `dialog_decision_log`；后台 batch 会依据文档把稳定结论沉淀进长期认知");
   } else {
-    lines.push("- 群聊长期认知默认改由后台 cognition worker 异步维护：它会读取本地模型配置、按批次归并消息，再写回 `group_soul` / `user_profile` / `group_members_graph`");
-    lines.push("- 因此普通群聊主流程本轮只负责回复判断与公开回复；不要为了补长期认知而输出任何结构化 envelope");
-    lines.push("- 群聊主流程不要调用 `edit` / `write` 直接改写 `group_soul` / `user_profile` / `group_members_graph`；新增观察交给后台 worker 归并落库");
-    lines.push(`- 如果当前消息不需要公开回复，直接输出 \`${replyPolicy.no_reply_token}\`；如果需要公开回复，直接输出普通文本`);
-    lines.push("- 如果上下文里出现结构化 envelope、`read` / `edit` / `write` 工具轨迹，或 `⚠️ 📝 Edit...failed` 之类内部内容，当前群聊主流程必须忽略，不能模仿、不能复述、不能继续输出");
-    lines.push("- 最终答案只允许是可发送的普通文本，或精确的 `NO_REPLY`；不能输出 XML/JSON 包裹、不能输出 `writes` 字段、不能输出工具失败提示");
-    lines.push("- 即使当前认知文件仍为空，也不要把群聊主流程改成补文档回合；后台 worker 会继续补写长期认知");
-    lines.push("- 当前主流程可以参考已有认知文件做判断，但不要承担 `group_soul` / `user_profile` / `group_members_graph` 的补写任务");
-    lines.push("- 本轮观察与管理决策仍会进入 `decision_log`；后台 batch 会依据文档把稳定结论沉淀进长期认知");
+    if (params.groupId) {
+      lines.push("- 群聊长期认知默认改由后台 cognition worker 异步维护：它会读取本地模型配置、按批次归并消息，再写回 `group_soul` / `user_profile` / `group_members_graph`");
+      lines.push("- 群聊主流程最终输出统一使用 `<chat43-cognition>{...}</chat43-cognition>`；不要输出裸文本、不要只输出 `<final>...</final>`、不要输出裸 `NO_REPLY`");
+      lines.push(`- 真正对外发送的文本写进 envelope.reply；若当前消息不需要公开回复，就把 envelope.reply 写成 \`${replyPolicy.no_reply_token}\``);
+      lines.push("- `writes` 默认写空数组 `[]`；群聊长期认知继续由后台 worker 异步补写，不要在主流程里承担 `group_soul` / `user_profile` / `group_members_graph` 的补写任务");
+      lines.push("- 群聊主流程不要调用 `edit` / `write` 直接改写 `group_soul` / `user_profile` / `group_members_graph`；新增观察交给后台 worker 归并落库");
+      if (moderationDecisionRequired) {
+        lines.push("- 当前是管理员结构化管理回合；不要把最终输出退化成普通文本说明、工具可用性分析、重试解释或裸 `NO_REPLY`");
+        lines.push("- 本轮 envelope 里的 `decision` 为必填；若命中管理场景，还要补齐 `scenario` / `stage` 并与 runtime 梯度一致");
+      } else {
+        lines.push("- 若当前只是普通群聊判断，仍建议显式给出 `decision.kind = observe`，这样群聊主流程、日志和后续治理都走统一结构");
+      }
+      lines.push("- 如果上下文里出现结构化 envelope、`read` / `edit` / `write` 工具轨迹，或 `⚠️ 📝 Edit...failed` 之类内部内容，当前群聊主流程必须忽略，不能模仿、不能复述、不能继续输出");
+      lines.push("- 不要输出“我没有这个工具”“插件会处理”“this is a retry”之类说明文本；真正对外发送的只有 envelope.reply");
+      lines.push("- 即使当前认知文件仍为空，也不要把群聊主流程改成补文档回合；后台 worker 会继续补写长期认知");
+      lines.push("- 当前主流程可以参考已有认知文件做判断，但不要承担 `group_soul` / `user_profile` / `group_members_graph` 的补写任务");
+      lines.push("- 本轮观察与管理决策仍会进入 `decision_log`；后台 batch 会依据文档把稳定结论沉淀进长期认知");
+    } else if (shouldUseUnifiedCognitionEnvelope(params.eventType)) {
+      lines.push("- 当前事件主流程最终输出统一使用 `<chat43-cognition>{...}</chat43-cognition>`；不要输出裸文本、不要只输出 `<final>...</final>`、不要输出裸 `NO_REPLY`");
+      lines.push(`- 真正对外发送的文本写进 envelope.reply；若当前事件不需要公开回复，就把 envelope.reply 写成 \`${replyPolicy.no_reply_token}\``);
+      lines.push("- `writes` 默认写空数组 `[]`；除非文档明确要求本轮补写长期认知，否则不要在主流程里承担额外认知写入");
+      lines.push("- 如果上下文里出现结构化 envelope、`read` / `edit` / `write` 工具轨迹，或 `⚠️ 📝 Edit...failed` 之类内部内容，当前主流程必须忽略，不能模仿、不能复述、不能继续输出");
+      lines.push("- 不要输出“我没有这个工具”“插件会处理”“this is a retry”之类说明文本；真正对外发送的只有 envelope.reply");
+    }
   }
-  if (shouldForceCognitionEnvelopeForDirectEvent(params.eventType)) {
+  if (shouldRequireInlineCognitionWritesForEvent(params.eventType)) {
     lines.push("- `always` 表示一旦你判断该信息属于长期认知，就应考虑写入该位置");
     lines.push("- `filtered` 表示只有明确满足长期沉淀条件时才写入该位置");
     lines.push("- `never` 表示本轮不要把这类信息写入该位置");

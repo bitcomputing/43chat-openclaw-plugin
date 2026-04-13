@@ -14,6 +14,7 @@ import {
   resolveSkillBootstrapDefaults,
   resolveSkillStorageTargets,
 } from "./skill-runtime.js";
+import { sanitizeUserProfileForStorage } from "./user-profile-sanitization.js";
 import type {
   Chat43AnySSEEvent,
   Chat43FriendAcceptedEventData,
@@ -448,7 +449,7 @@ function normalizeUserProfile(
     ? currentContent.notes.map((entry) => String(entry)).filter(Boolean).join("；")
     : readString(currentContent.notes);
 
-  return {
+  return sanitizeUserProfileForStorage({
     ...defaultContent,
     schema_version: readString(currentContent.schema_version) ?? defaultContent.schema_version,
     user_id: readString(currentContent.user_id) ?? defaultContent.user_id,
@@ -475,7 +476,7 @@ function normalizeUserProfile(
     updated_at: readString(currentContent.updated_at)
       ?? readString(currentContent.last_seen_at)
       ?? defaultContent.updated_at,
-  };
+  });
 }
 
 function normalizeGroupSoul(
