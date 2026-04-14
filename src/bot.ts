@@ -828,6 +828,11 @@ export function resolveCognitionFullPath(pathValue: string): string | null {
   return fullPath;
 }
 
+function repairXmlCorruptedJsonKeys(raw: string): string {
+  // MiniMax sometimes outputs `<writes":` or `<chat43-writes":` instead of `"writes":`
+  return raw.replace(/<(?:chat43-)?([a-z_]+)"(\s*:)/gi, '"$1"$2');
+}
+
 export function parseCognitionWriteEnvelope(text: string): CognitionWriteEnvelope | null {
   const match = text.match(/<chat43-cognition>\s*([\s\S]*?)\s*<\/chat43-cognition>/i)
     ?? text.match(/```chat43-cognition\s*([\s\S]*?)```/i);
@@ -835,15 +840,17 @@ export function parseCognitionWriteEnvelope(text: string): CognitionWriteEnvelop
     return null;
   }
 
+  const inner = repairXmlCorruptedJsonKeys(match[1]);
+
   try {
-    const parsed = parseLooseCognitionEnvelopeJson(match[1]) as unknown;
+    const parsed = parseLooseCognitionEnvelopeJson(inner) as unknown;
     return normalizeParsedCognitionWriteEnvelope({
       parsed,
       fallbackReplyText: text.replace(match[0], "").trim(),
     });
   } catch {
-    return parseMalformedCognitionWriteEnvelope(match[1])
-      ?? parseLegacyXmlStyleCognitionEnvelope(match[1]);
+    return parseMalformedCognitionWriteEnvelope(inner)
+      ?? parseLegacyXmlStyleCognitionEnvelope(inner);
   }
 }
 
@@ -1480,10 +1487,22 @@ function resolveGroupFinalReplyText(text: string): string {
 export function resolvePrimaryDispatchSessionKey(params: {
   baseSessionKey: string;
   chatType: "direct" | "group";
+  eventType: Chat43AnySSEEvent["event_type"];
   messageId: string;
 }): string {
-  void params.chatType;
   void params.messageId;
+  if (params.chatType !== "direct") {
+    return params.baseSessionKey;
+  }
+
+  if (params.eventType === "friend_request") {
+    return "agent:main:43chat-openclaw-plugin:friend-request";
+  }
+
+  if (params.eventType === "friend_accepted") {
+    return params.baseSessionKey.replace(":direct:", ":friend-accepted:");
+  }
+
   return params.baseSessionKey;
 }
 
@@ -1609,7 +1628,7 @@ export function resolveRetryFallbackForMissingEnvelope(params: {
   return {
     keepFirstOutwardReply,
     finalReplyText: keepFirstOutwardReply
-      ? params.firstAttemptOutcome.replyText
+      ? (params.firstAttemptOutcome as { kind: "reply"; replyText: string; reason: string }).replyText
       : retryFallbackReplyText,
   };
 }
@@ -1994,6 +2013,7 @@ export async function handle43ChatEvent(
   const baseDispatchSessionKey = resolvePrimaryDispatchSessionKey({
     baseSessionKey: route.sessionKey,
     chatType: inbound.chatType,
+    eventType: event.event_type,
     messageId: inbound.messageId,
   });
 

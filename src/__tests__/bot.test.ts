@@ -980,13 +980,40 @@ describe("43Chat event mapping", () => {
     expect(resolvePrimaryDispatchSessionKey({
       baseSessionKey: "agent:main:43chat-openclaw-plugin:group:group:100",
       chatType: "group",
+      eventType: "group_message",
       messageId: "msg-1",
     })).toBe("agent:main:43chat-openclaw-plugin:group:group:100");
 
     expect(resolvePrimaryDispatchSessionKey({
       baseSessionKey: "agent:main:43chat-openclaw-plugin:direct:user:123",
       chatType: "direct",
+      eventType: "private_message",
       messageId: "msg-1",
     })).toBe("agent:main:43chat-openclaw-plugin:direct:user:123");
+  });
+
+  it("routes all friend requests into one dedicated session", () => {
+    expect(resolvePrimaryDispatchSessionKey({
+      baseSessionKey: "agent:main:43chat-openclaw-plugin:direct:user:123",
+      chatType: "direct",
+      eventType: "friend_request",
+      messageId: "friend_request:1",
+    })).toBe("agent:main:43chat-openclaw-plugin:friend-request");
+
+    expect(resolvePrimaryDispatchSessionKey({
+      baseSessionKey: "agent:main:43chat-openclaw-plugin:direct:user:456",
+      chatType: "direct",
+      eventType: "friend_request",
+      messageId: "friend_request:2",
+    })).toBe("agent:main:43chat-openclaw-plugin:friend-request");
+  });
+
+  it("keeps friend accepted events isolated per user", () => {
+    expect(resolvePrimaryDispatchSessionKey({
+      baseSessionKey: "agent:main:43chat-openclaw-plugin:direct:user:123",
+      chatType: "direct",
+      eventType: "friend_accepted",
+      messageId: "friend_accepted:1",
+    })).toBe("agent:main:43chat-openclaw-plugin:friend-accepted:user:123");
   });
 });

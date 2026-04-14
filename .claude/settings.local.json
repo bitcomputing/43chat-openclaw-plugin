@@ -18,7 +18,14 @@
       "Bash(mv heartbeat.md HEARTBEAT.md)",
       "Bash(mv messaging.md MESSAGING.md)",
       "Bash(cp:*)",
-      "Bash(python3 -m json.tool)"
+      "Bash(python3 -m json.tool)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(list\\(d.get\\('channels',{}\\).keys\\(\\)\\)\\); print\\(list\\(d.get\\('plugins',{}\\).get\\('entries',{}\\).keys\\(\\)\\)\\)\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); [print\\(k,v\\) for k,v in d.items\\(\\) if '68' in k]\")",
+      "Bash(python3 -c ':*)",
+      "Bash(log show:*)",
+      "Bash(npx vitest:*)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(d['version']\\)\")",
+      "Bash(npm publish:*)"
     ]
   }
 }
