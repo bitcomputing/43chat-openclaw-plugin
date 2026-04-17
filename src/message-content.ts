@@ -60,3 +60,17 @@ export function truncateForLog(text: string, maxLength = 280): string {
 export function looksQuestionLike(text: string): boolean {
   return /[?？]|(怎么|如何|推荐|建议|适合|要不要|是否|有没有|哪[里个种]|多长|多久|安排|路线|省心|轻松)/u.test(text);
 }
+
+export function mapGroupRoleName(roleValue?: number, roleNameValue?: string): string | undefined {
+  const normalizedRoleName = roleNameValue?.trim();
+  if (roleValue === 2 || normalizedRoleName === "owner") return "群主";
+  if (roleValue === 1 || normalizedRoleName === "admin") return "管理员";
+  if (roleValue === 0 || normalizedRoleName === "member") return "成员";
+  return normalizedRoleName || undefined;
+}
+
+export function shouldStampSemanticUpdatedAt(pathValue: string): boolean {
+  return pathValue.endsWith("/soul.json")
+    || pathValue.endsWith("/members_graph.json")
+    || /(?:^|\/)profiles\/[^/]+\.json$/.test(pathValue);
+}

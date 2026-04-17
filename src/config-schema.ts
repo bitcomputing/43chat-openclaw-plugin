@@ -11,6 +11,7 @@ const Chat43SharedConfigShape = {
   requestTimeoutMs: z.number().int().positive().optional(),
   sseReconnectDelayMs: z.number().int().positive().optional(),
   sseMaxReconnectDelayMs: z.number().int().positive().optional(),
+  sseHeartbeatTimeoutMs: z.number().int().positive().optional(),
   promptGroupContextEnabled: z.boolean().optional(),
   promptGroupContextApiPath: z.string().optional(),
   promptGroupContextRefreshMs: z.number().int().positive().optional(),

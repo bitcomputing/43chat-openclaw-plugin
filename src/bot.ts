@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFile, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, normalize, sep } from "node:path";
 import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk";
@@ -25,7 +26,7 @@ import {
   scheduleDecisionBriefRefresh,
 } from "./cognition-batch.js";
 import { scheduleLongTermCognitionRefresh } from "./cognition-worker.js";
-import { extract43ChatTextContent, truncateForLog } from "./message-content.js";
+import { extract43ChatTextContent, truncateForLog, mapGroupRoleName, shouldStampSemanticUpdatedAt } from "./message-content.js";
 import { evaluateReplyPolicy } from "./reply-policy.js";
 import { ensureSessionLogDir, resolveSessionLogDir } from "./session-log-dir.js";
 import {
@@ -267,7 +268,7 @@ function buildEmptyAssistantTrace(
 
 const SESSION_LOG_TIME_WINDOW_TOLERANCE_MS = 10_000;
 const SESSION_LOG_MAX_CANDIDATE_FILES = 4;
-const SESSION_LOG_TAIL_BYTES = 4_000_000;
+const SESSION_LOG_TAIL_BYTES = 65_536;
 
 function inspectAssistantOutputRecord(record: unknown): RecentAssistantOutputTrace | null {
   if (!isPlainObject(record) || record.eventType !== "llm_output" || !isPlainObject(record.payload)) {
@@ -366,25 +367,25 @@ export function extractReusableOutwardReplyText(text: string): string {
   return unwrapFinalReplyTag(text).trim();
 }
 
-export function recoverRecentFinalReplyFromSessionLog(params: {
+export async function recoverRecentFinalReplyFromSessionLog(params: {
   sessionKey: string;
   sinceTimestamp: number;
   env?: NodeJS.ProcessEnv;
-}): string {
-  return inspectRecentAssistantOutputFromSessionLog(params)?.finalText ?? "";
+}): Promise<string> {
+  return (await inspectRecentAssistantOutputFromSessionLog(params))?.finalText ?? "";
 }
 
-export function inspectRecentAssistantOutputFromSessionLog(params: {
+export async function inspectRecentAssistantOutputFromSessionLog(params: {
   sessionKey: string;
   sinceTimestamp: number;
   env?: NodeJS.ProcessEnv;
-}): RecentAssistantOutputTrace | null {
+}): Promise<RecentAssistantOutputTrace | null> {
   const logDir = resolveSessionLogDir(params.sessionKey, params.env);
   if (!existsSync(logDir)) {
     return buildEmptyAssistantTrace("log_dir_missing", { log_dir: logDir });
   }
 
-  const entries = readdirSync(logDir);
+  const entries = await readdir(logDir).catch(() => [] as string[]);
   if (entries.length === 0) {
     return buildEmptyAssistantTrace("log_dir_empty", { log_dir: logDir, entry_count: 0 });
   }
@@ -407,7 +408,7 @@ export function inspectRecentAssistantOutputFromSessionLog(params: {
 
   for (const fileName of candidates) {
     try {
-      const raw = readFileSync(join(logDir, fileName), "utf8");
+      const raw = await readFile(join(logDir, fileName), "utf8").catch(() => "");
       const tail = raw.length > SESSION_LOG_TAIL_BYTES ? raw.slice(-SESSION_LOG_TAIL_BYTES) : raw;
       const lines = tail.split("\n").filter(Boolean);
       for (let index = lines.length - 1; index >= 0; index -= 1) {
@@ -466,19 +467,6 @@ export function inspectRecentAssistantOutputFromSessionLog(params: {
   });
 }
 
-function mapGroupRoleName(roleValue?: number, roleNameValue?: string): string | undefined {
-  const normalizedRoleName = roleNameValue?.trim();
-  if (roleValue === 2 || normalizedRoleName === "owner") {
-    return "群主";
-  }
-  if (roleValue === 1 || normalizedRoleName === "admin") {
-    return "管理员";
-  }
-  if (roleValue === 0 || normalizedRoleName === "member") {
-    return "成员";
-  }
-  return normalizedRoleName || undefined;
-}
 
 function rememberProcessedEvent(key: string): boolean {
   if (processedEvents.has(key)) {
@@ -486,12 +474,7 @@ function rememberProcessedEvent(key: string): boolean {
   }
   processedEvents.set(key, Date.now());
   if (processedEvents.size > MAX_PROCESSED_EVENTS) {
-    const entries = Array.from(processedEvents.entries())
-      .sort((a, b) => a[1] - b[1])
-      .slice(0, Math.floor(MAX_PROCESSED_EVENTS / 2));
-    for (const [entryKey] of entries) {
-      processedEvents.delete(entryKey);
-    }
+    processedEvents.delete(processedEvents.keys().next().value!);
   }
   return false;
 }
@@ -956,11 +939,6 @@ function resolveEventIsoTime(event: Chat43AnySSEEvent): string {
   return new Date(dataTimestamp ?? event.timestamp ?? Date.now()).toISOString();
 }
 
-function shouldStampSemanticUpdatedAt(pathValue: string): boolean {
-  return pathValue.endsWith("/soul.json")
-    || pathValue.endsWith("/members_graph.json")
-    || /(?:^|\/)profiles\/[^/]+\.json$/.test(pathValue);
-}
 
 export function resolveCognitionFullPath(pathValue: string): string | null {
   const trimmedPath = pathValue.trim();
@@ -1041,7 +1019,7 @@ export function normalizeDispatchFinalOutput(params: {
     };
   }
 
-  const trailingEnvelope = extractTrailingCognitionEnvelope(trimmed);
+  const trailingEnvelope = extractTrailingCognitionEnvelope(trimmed, params.noReplyToken);
   if (trailingEnvelope) {
     return {
       cognitionEnvelope: trailingEnvelope.envelope,
@@ -1119,7 +1097,7 @@ function normalizeParsedCognitionWriteEnvelope(params: {
   };
 }
 
-function extractTrailingCognitionEnvelope(text: string): {
+function extractTrailingCognitionEnvelope(text: string, noReplyToken?: string): {
   envelope: CognitionWriteEnvelope;
   leadingText: string;
   protocol: DispatchFinalNormalizationResult["normalizedProtocol"];
@@ -1129,12 +1107,18 @@ function extractTrailingCognitionEnvelope(text: string): {
     return null;
   }
 
-  for (let index = trimmed.lastIndexOf("{"); index >= 0; index = trimmed.lastIndexOf("{", index - 1)) {
-    const candidate = trimmed.slice(index).trim();
+  const searchWindow = trimmed.length > 2048 ? trimmed.slice(-2048) : trimmed;
+  const windowOffset = trimmed.length - searchWindow.length;
+  for (let index = searchWindow.lastIndexOf("{"); index >= 0; index = searchWindow.lastIndexOf("{", index - 1)) {
+    const absoluteIndex = windowOffset + index;
+    const candidate = trimmed.slice(absoluteIndex).trim();
     if (!candidate.startsWith("{") || !candidate.endsWith("}")) {
       continue;
     }
-    const leadingText = trimmed.slice(0, index).trim();
+    let leadingText = trimmed.slice(0, absoluteIndex).trim();
+    if (noReplyToken && leadingText.endsWith(noReplyToken)) {
+      leadingText = leadingText.slice(0, -noReplyToken.length).trim();
+    }
     if (!leadingText) {
       continue;
     }
@@ -2479,6 +2463,11 @@ export async function handle43ChatEvent(
   }
   const mainFlowMissingSummaries = forceInlineCognitionEnvelopeForMainFlow ? initialMissingSummaries : [];
 
+  const earlyDedupeKey = resolveBusinessId(event);
+  if (rememberProcessedEvent(earlyDedupeKey)) {
+    return null;
+  }
+
   let inbound = buildInboundDescriptor(event, {
     cfg,
     accountId,
@@ -2490,7 +2479,7 @@ export async function handle43ChatEvent(
     return null;
   }
 
-  if (rememberProcessedEvent(inbound.dedupeKey)) {
+  if (inbound.dedupeKey !== earlyDedupeKey && rememberProcessedEvent(inbound.dedupeKey)) {
     return null;
   }
 
@@ -2767,7 +2756,7 @@ export async function handle43ChatEvent(
     }
 
     if (!finalText.trim() || replyDispatcherErrored) {
-      const assistantTrace = inspectRecentAssistantOutputFromSessionLog({
+      const assistantTrace = await inspectRecentAssistantOutputFromSessionLog({
         sessionKey: attemptSessionKey,
         sinceTimestamp: attemptStartedAt,
       });

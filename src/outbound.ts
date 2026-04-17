@@ -1,7 +1,10 @@
-import type { ChannelOutboundAdapter, ChannelOutboundContext, ReplyPayload } from "openclaw/plugin-sdk";
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
+import type { ReplyPayload } from "openclaw/plugin-sdk";
 import { sendMessage43Chat } from "./send.js";
 import { log } from "node:console";
 import packageJson from "../package.json" with { type: "json" };
+
+type ChannelOutboundContext = Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0];
 
 function looksLikeStructuredCognitionJson(text: string): boolean {
   try {

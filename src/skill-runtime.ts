@@ -1251,17 +1251,23 @@ export function resolve43ChatSkillRuntimePath(cfg?: ClawdbotConfig): string {
     ?? join(resolve43ChatSkillDocsDir(cfg), "skill.runtime.json");
 }
 
+const skillRuntimeCache = new Map<string, { value: LoadedSkillRuntime; expiresAt: number }>();
+const SKILL_RUNTIME_CACHE_TTL_MS = 30_000;
+
 export function load43ChatSkillRuntime(cfg?: ClawdbotConfig): LoadedSkillRuntime {
   const docsDir = resolve43ChatSkillDocsDir(cfg);
   const runtimePath = resolve43ChatSkillRuntimePath(cfg);
+  const cacheKey = runtimePath;
+  const now = Date.now();
+  const cached = skillRuntimeCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
+  }
 
   if (!existsSync(runtimePath)) {
-    return {
-      source: "builtin",
-      docsDir,
-      runtimePath,
-      data: DEFAULT_SKILL_RUNTIME,
-    };
+    const value = { source: "builtin" as const, docsDir, runtimePath, data: DEFAULT_SKILL_RUNTIME };
+    skillRuntimeCache.set(cacheKey, { value, expiresAt: now + SKILL_RUNTIME_CACHE_TTL_MS });
+    return value;
   }
 
   try {
@@ -1279,20 +1285,13 @@ export function load43ChatSkillRuntime(cfg?: ClawdbotConfig): LoadedSkillRuntime
       bootstrap_defaults: toUnknownRecord(raw.bootstrap_defaults),
       event_profiles: toEventProfiles(raw.event_profiles),
     });
-
-    return {
-      source: "file",
-      docsDir,
-      runtimePath,
-      data: merged,
-    };
+    const value = { source: "file" as const, docsDir, runtimePath, data: merged };
+    skillRuntimeCache.set(cacheKey, { value, expiresAt: now + SKILL_RUNTIME_CACHE_TTL_MS });
+    return value;
   } catch {
-    return {
-      source: "builtin",
-      docsDir,
-      runtimePath,
-      data: DEFAULT_SKILL_RUNTIME,
-    };
+    const value = { source: "builtin" as const, docsDir, runtimePath, data: DEFAULT_SKILL_RUNTIME };
+    skillRuntimeCache.set(cacheKey, { value, expiresAt: now + SKILL_RUNTIME_CACHE_TTL_MS });
+    return value;
   }
 }
 

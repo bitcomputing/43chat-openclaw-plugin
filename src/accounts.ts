@@ -81,6 +81,7 @@ export function resolve43ChatAccount({
         requestTimeoutMs: chatCfg.requestTimeoutMs,
         sseReconnectDelayMs: chatCfg.sseReconnectDelayMs,
         sseMaxReconnectDelayMs: chatCfg.sseMaxReconnectDelayMs,
+        sseHeartbeatTimeoutMs: chatCfg.sseHeartbeatTimeoutMs,
         promptGroupContextEnabled: chatCfg.promptGroupContextEnabled,
         promptGroupContextApiPath: chatCfg.promptGroupContextApiPath,
         promptGroupContextRefreshMs: chatCfg.promptGroupContextRefreshMs,
@@ -104,6 +105,8 @@ export function resolve43ChatAccount({
     sseReconnectDelayMs: accountCfg?.sseReconnectDelayMs ?? chatCfg?.sseReconnectDelayMs,
     sseMaxReconnectDelayMs:
       accountCfg?.sseMaxReconnectDelayMs ?? chatCfg?.sseMaxReconnectDelayMs,
+    sseHeartbeatTimeoutMs:
+      accountCfg?.sseHeartbeatTimeoutMs ?? chatCfg?.sseHeartbeatTimeoutMs,
     promptGroupContextEnabled:
       accountCfg?.promptGroupContextEnabled ?? chatCfg?.promptGroupContextEnabled,
     promptGroupContextApiPath:

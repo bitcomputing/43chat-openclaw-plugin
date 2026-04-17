@@ -6,6 +6,7 @@ import {
   extract43ChatTextContent,
   inferMessageTopicSummary,
   looksQuestionLike,
+  mapGroupRoleName,
   truncateForLog,
 } from "./message-content.js";
 import { appendJsonlRecord } from "./jsonl-store.js";
@@ -79,16 +80,6 @@ export type GroupMessageCognitionWriteRequirements = {
   issues: CognitionWriteRequirementIssue[];
 };
 
-function mapGroupRoleName(roleValue?: number, roleNameValue?: string): string {
-  const normalizedRoleName = roleNameValue?.trim();
-  if (roleValue === 2 || normalizedRoleName === "owner") {
-    return "群主";
-  }
-  if (roleValue === 1 || normalizedRoleName === "admin") {
-    return "管理员";
-  }
-  return "成员";
-}
 
 function buildTimeVars(timestamp: number | undefined): Record<string, string> {
   const date = new Date(timestamp ?? Date.now());

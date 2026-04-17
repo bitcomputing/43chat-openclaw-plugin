@@ -3,12 +3,13 @@ import { homedir } from "node:os";
 import { dirname, join, normalize } from "node:path";
 import type { ClawdbotConfig } from "openclaw/plugin-sdk";
 import { normalizeSkillCognitionWriteContent } from "./cognition-bootstrap.js";
-import { extract43ChatTextContent, truncateForLog } from "./message-content.js";
+import { extract43ChatTextContent, mapGroupRoleName, shouldStampSemanticUpdatedAt, truncateForLog } from "./message-content.js";
 import {
   load43ChatSkillRuntime,
   resolveSkillDocPaths,
   resolveSkillStorageTargets,
 } from "./skill-runtime.js";
+import { readRecentJsonlRecords } from "./jsonl-store.js";
 import type {
   Chat43AnySSEEvent,
   Chat43GroupMessageEventData,
@@ -65,6 +66,7 @@ type PendingGroupCognitionBatch = {
   events: GroupMessageEvent[];
   running: boolean;
   needsRerun: boolean;
+  failCount: number;
   timer?: ReturnType<typeof setTimeout>;
   log?: (message: string) => void;
   error?: (message: string) => void;
@@ -77,6 +79,7 @@ type PendingDirectCognitionBatch = {
   events: PrivateMessageEvent[];
   running: boolean;
   needsRerun: boolean;
+  failCount: number;
   timer?: ReturnType<typeof setTimeout>;
   log?: (message: string) => void;
   error?: (message: string) => void;
@@ -146,49 +149,21 @@ function readDocExcerpt(pathValue: string): string {
   return readOptionalText(pathValue, GROUP_COGNITION_DOC_MAX_CHARS) || "<empty>";
 }
 
-function readRecentJsonlRecords(pathValue: string, limit: number): Record<string, unknown>[] {
-  if (!existsSync(pathValue)) {
-    return [];
-  }
-  try {
-    const raw = readFileSync(pathValue, "utf8").trim();
-    if (!raw) {
-      return [];
-    }
-    return raw
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .slice(-limit)
-      .map((line) => {
-        try {
-          const parsed = JSON.parse(line) as unknown;
-          return isPlainObject(parsed) ? parsed : null;
-        } catch {
-          return null;
-        }
-      })
-      .filter((entry): entry is Record<string, unknown> => Boolean(entry));
-  } catch {
-    return [];
-  }
-}
 
-function mapGroupRoleName(roleValue?: number, roleNameValue?: string): string {
-  const normalizedRoleName = roleNameValue?.trim();
-  if (roleValue === 2 || normalizedRoleName === "owner") {
-    return "群主";
-  }
-  if (roleValue === 1 || normalizedRoleName === "admin") {
-    return "管理员";
-  }
-  return "成员";
-}
+const localJsonCache = new Map<string, { value: Record<string, unknown>; expiresAt: number }>();
+const LOCAL_JSON_CACHE_TTL_MS = 60_000;
 
 function readLocalJson(pathValue: string): Record<string, unknown> {
+  const now = Date.now();
+  const cached = localJsonCache.get(pathValue);
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
+  }
   try {
     const parsed = JSON.parse(readFileSync(pathValue, "utf8")) as unknown;
-    return isPlainObject(parsed) ? parsed : {};
+    const value = isPlainObject(parsed) ? parsed : {};
+    localJsonCache.set(pathValue, { value, expiresAt: now + LOCAL_JSON_CACHE_TTL_MS });
+    return value;
   } catch {
     return {};
   }
@@ -221,9 +196,16 @@ export function resolveLocalModelConfig(params?: {
   const [primaryProviderId, primaryModelId] = primaryModelRef.includes("/")
     ? primaryModelRef.split("/", 2)
     : ["", ""];
-  const selectedProviderId = providerEntries.some(([providerId]) => providerId === primaryProviderId)
+  const SUPPORTED_APIS = ["anthropic-messages", "openai-completions", "openai-chat"];
+  const supportedEntries = providerEntries.filter(([, value]) => {
+    const p = value as Record<string, unknown>;
+    const api = readString(p.api) || "anthropic-messages";
+    return SUPPORTED_APIS.includes(api);
+  });
+  const candidateEntries = supportedEntries.length > 0 ? supportedEntries : providerEntries;
+  const selectedProviderId = candidateEntries.some(([providerId]) => providerId === primaryProviderId)
     ? primaryProviderId
-    : providerEntries[0]?.[0] ?? "";
+    : candidateEntries[0]?.[0] ?? "";
   if (!selectedProviderId) {
     throw new Error("43chat cognition worker: failed to select provider");
   }
@@ -298,7 +280,7 @@ function extractOpenAiCompletionTextResponse(response: unknown): string {
     .trim();
 }
 
-function buildModelApiUrl(baseUrl: string, endpoint: "messages" | "completions"): string {
+function buildModelApiUrl(baseUrl: string, endpoint: "messages" | "completions" | "chat/completions"): string {
   const normalizedBase = baseUrl.replace(/\/+$/, "");
   if (normalizedBase.endsWith(`/${endpoint}`)) {
     return normalizedBase;
@@ -349,6 +331,22 @@ export async function requestBackgroundCognitionWrites(params: {
         body: JSON.stringify({
           model: params.modelConfig.modelId,
           prompt: params.prompt,
+          max_tokens: Math.min(Math.max(params.modelConfig.maxTokens, 1024), 8_192),
+          temperature: 0,
+          stream: false,
+        }),
+      });
+    } else if (params.modelConfig.api === "openai-chat") {
+      response = await fetch(buildModelApiUrl(params.modelConfig.baseUrl, "chat/completions"), {
+        method: "POST",
+        signal: abortController.signal,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${params.modelConfig.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: params.modelConfig.modelId,
+          messages: [{ role: "user", content: params.prompt }],
           max_tokens: Math.min(Math.max(params.modelConfig.maxTokens, 1024), 8_192),
           temperature: 0,
           stream: false,
@@ -1399,11 +1397,6 @@ function buildSyntheticGroupMessageEvent(params: {
   };
 }
 
-function shouldStampSemanticUpdatedAt(pathValue: string): boolean {
-  return pathValue.endsWith("/soul.json")
-    || pathValue.endsWith("/members_graph.json")
-    || /(?:^|\/)profiles\/[^/]+\.json$/.test(pathValue);
-}
 
 function resolveNicknameForProfileWrite(params: {
   fullPath: string;
@@ -1768,12 +1761,20 @@ async function flushGroupCognitionBatch(groupId: string): Promise<void> {
   } catch (cause) {
     state.error?.(`43chat cognition worker: batch failed for group ${groupId}: ${String(cause)}`);
     state.events = trimQueuedEvents([...batchEvents, ...state.events]);
+    state.failCount += 1;
   } finally {
     state.running = false;
-    if (state.events.length > 0 || state.needsRerun) {
-      scheduleFlush(groupId, 1_500);
+    if ((state.events.length > 0 || state.needsRerun) && state.failCount <= 3) {
+      const retryDelay = state.failCount > 0
+        ? Math.min(1_500 * 2 ** (state.failCount - 1), 300_000)
+        : 1_500;
+      scheduleFlush(groupId, retryDelay);
       return;
     }
+    if (state.failCount > 3) {
+      state.error?.(`43chat cognition worker: group ${groupId} batch abandoned after ${state.failCount} failures`);
+    }
+    state.failCount = 0;
     pendingGroupCognitionBatches.delete(groupId);
   }
 }
@@ -1807,12 +1808,20 @@ async function flushDirectCognitionBatch(userId: string): Promise<void> {
   } catch (cause) {
     state.error?.(`43chat cognition worker: direct batch failed for user ${userId}: ${String(cause)}`);
     state.events = trimQueuedDirectEvents([...batchEvents, ...state.events]);
+    state.failCount += 1;
   } finally {
     state.running = false;
-    if (state.events.length > 0 || state.needsRerun) {
-      scheduleDirectFlush(userId, 1_500);
+    if ((state.events.length > 0 || state.needsRerun) && state.failCount <= 3) {
+      const retryDelay = state.failCount > 0
+        ? Math.min(1_500 * 2 ** (state.failCount - 1), 300_000)
+        : 1_500;
+      scheduleDirectFlush(userId, retryDelay);
       return;
     }
+    if (state.failCount > 3) {
+      state.error?.(`43chat cognition worker: user ${userId} batch abandoned after ${state.failCount} failures`);
+    }
+    state.failCount = 0;
     pendingDirectCognitionBatches.delete(userId);
   }
 }
@@ -1837,6 +1846,7 @@ export function scheduleGroupLongTermCognitionRefresh(params: {
     events: [],
     running: false,
     needsRerun: false,
+    failCount: 0,
     log: params.log,
     error: params.error,
   };
@@ -1881,6 +1891,7 @@ export function schedulePrivateLongTermCognitionRefresh(params: {
     events: [],
     running: false,
     needsRerun: false,
+    failCount: 0,
     log: params.log,
     error: params.error,
   };

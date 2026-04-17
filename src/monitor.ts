@@ -85,6 +85,7 @@ async function monitorSingleAccount(params: {
   let reconnectAttempts = 0;
   const reconnectBaseDelay = account.config.sseReconnectDelayMs ?? 1_000;
   const reconnectMaxDelay = account.config.sseMaxReconnectDelayMs ?? 60_000;
+  const heartbeatTimeoutMs = account.config.sseHeartbeatTimeoutMs ?? 90_000;
 
   const stopStatus = () => {
     emitStatus({
@@ -117,12 +118,25 @@ async function monitorSingleAccount(params: {
 
       log(`43chat[${accountId}]: connecting SSE stream...`);
 
+      const watchdogController = new AbortController();
+      let watchdogTimer: ReturnType<typeof setTimeout> | undefined;
+      const resetWatchdog = () => {
+        clearTimeout(watchdogTimer);
+        watchdogTimer = setTimeout(() => {
+          error(`43chat[${accountId}]: SSE heartbeat timeout, forcing reconnect`);
+          watchdogController.abort();
+        }, heartbeatTimeoutMs);
+      };
+      const watchdogSignal = combineSignals([combinedSignal, watchdogController.signal]);
+
       try {
+
         const client = create43ChatClient(account);
         await client.connectSSE<Chat43AnySSEEvent>({
-          signal: combinedSignal,
+          signal: watchdogSignal,
           onOpen: () => {
             reconnectAttempts = 0;
+            resetWatchdog();
             emitStatus({
               running: true,
               connected: true,
@@ -135,6 +149,7 @@ async function monitorSingleAccount(params: {
             log(`43chat[${accountId}]: SSE connected`);
           },
           onHeartbeat: () => {
+            resetWatchdog();
             emitStatus({
               running: true,
               connected: true,
@@ -146,8 +161,8 @@ async function monitorSingleAccount(params: {
             error(`43chat[${accountId}]: invalid SSE frame (${reason}): ${JSON.stringify(frame)}`);
           },
           onEvent: async (event) => {
+            resetWatchdog();
             emitStatus({ lastInboundAt: Date.now() });
-            log(`43chat[${accountId}]: SSE event: ${JSON.stringify(event)}`);
             await handle43ChatEvent({
               cfg,
               event,
@@ -157,6 +172,7 @@ async function monitorSingleAccount(params: {
           },
         });
 
+        clearTimeout(watchdogTimer);
         if (combinedSignal?.aborted) {
           break;
         }
@@ -166,6 +182,7 @@ async function monitorSingleAccount(params: {
           retryable: true,
         });
       } catch (err) {
+        clearTimeout(watchdogTimer);
         if (combinedSignal?.aborted) {
           break;
         }
