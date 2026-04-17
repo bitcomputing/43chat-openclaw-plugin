@@ -186,7 +186,11 @@ export function resolveLocalModelConfig(params?: {
   const authProfilesPath = join(openclawHome, "agents", "main", "agent", "auth-profiles.json");
   const modelsJson = readLocalJson(modelsPath);
   const authProfilesJson = readLocalJson(authProfilesPath);
-  const providers = isPlainObject(modelsJson.providers) ? modelsJson.providers : {};
+  const globalConfig = readLocalJson(join(openclawHome, "openclaw.json"));
+  const globalModels = isPlainObject(globalConfig.models) ? globalConfig.models as Record<string, unknown> : {};
+  const globalProviders = isPlainObject(globalModels.providers) ? globalModels.providers as Record<string, unknown> : {};
+  const baseProviders = isPlainObject(modelsJson.providers) ? modelsJson.providers as Record<string, unknown> : {};
+  const providers = { ...baseProviders, ...globalProviders };
   const providerEntries = Object.entries(providers).filter(([, value]) => isPlainObject(value));
   if (providerEntries.length === 0) {
     throw new Error(`43chat cognition worker: no providers found in ${modelsPath}`);
