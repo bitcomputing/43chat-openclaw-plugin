@@ -340,6 +340,24 @@ export async function requestBackgroundCognitionWrites(params: {
           stream: false,
         }),
       });
+      // fallback to chat/completions if provider doesn't support legacy completions endpoint
+      if (response.status === 404) {
+        response = await fetch(buildModelApiUrl(params.modelConfig.baseUrl, "chat/completions"), {
+          method: "POST",
+          signal: abortController.signal,
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${params.modelConfig.apiKey}`,
+          },
+          body: JSON.stringify({
+            model: params.modelConfig.modelId,
+            messages: [{ role: "user", content: params.prompt }],
+            max_tokens: Math.min(Math.max(params.modelConfig.maxTokens, 1024), 8_192),
+            temperature: 0,
+            stream: false,
+          }),
+        });
+      }
     } else if (params.modelConfig.api === "openai-chat") {
       response = await fetch(buildModelApiUrl(params.modelConfig.baseUrl, "chat/completions"), {
         method: "POST",
