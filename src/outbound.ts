@@ -3,6 +3,24 @@ import { sendMessage43Chat } from "./send.js";
 import { log } from "node:console";
 import packageJson from "../package.json" with { type: "json" };
 
+function looksLikeStructuredCognitionJson(text: string): boolean {
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return false;
+    }
+    const record = parsed as Record<string, unknown>;
+    if (Object.hasOwn(record, "envelope")) {
+      return false;
+    }
+    return Object.hasOwn(record, "reply")
+      || Object.hasOwn(record, "writes")
+      || Object.hasOwn(record, "decision");
+  } catch {
+    return false;
+  }
+}
+
 function classifySuppressedOutboundText(text: string): "no_reply" | "cognition_envelope" | null {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -14,6 +32,7 @@ function classifySuppressedOutboundText(text: string): "no_reply" | "cognition_e
   if (
     /^<chat43-cognition>[\s\S]*<\/chat43-cognition>$/i.test(trimmed)
     || /^```chat43-cognition[\s\S]*```$/i.test(trimmed)
+    || looksLikeStructuredCognitionJson(trimmed)
   ) {
     return "cognition_envelope";
   }

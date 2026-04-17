@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, normalize, sep } from "node:path";
 import type { ClawdbotConfig } from "openclaw/plugin-sdk";
@@ -8,6 +8,7 @@ import {
   looksQuestionLike,
   truncateForLog,
 } from "./message-content.js";
+import { appendJsonlRecord } from "./jsonl-store.js";
 import {
   load43ChatSkillRuntime,
   resolveSkillCognitionPolicy,
@@ -26,6 +27,8 @@ import type {
 } from "./types.js";
 
 const STORAGE_ROOT = join(homedir(), ".config", "43chat");
+const DECISION_LOG_MAX_ENTRIES = 1500;
+const DECISION_LOG_RETAIN_ENTRIES = 1000;
 
 type BootstrapContext = {
   eventType: string;
@@ -42,6 +45,24 @@ export type CognitionMutationResult = {
   updated: string[];
   appended: string[];
   skipped: string[];
+};
+
+export type SkillDecisionDiagnostics = {
+  rawFinalText?: string;
+  resolvedReplyText?: string;
+  rawFinalKind?: string;
+  normalizedProtocol?: string;
+  attemptOutcomeKind?: string;
+  outwardOutcomeKind?: string;
+  resolutionAction?: string;
+  retryAttempted?: boolean;
+  retryReason?: string;
+  dispatchError?: string;
+  recoveredFromSessionLog?: boolean;
+  deliverSawFinal?: boolean;
+  queuedFinal?: boolean;
+  finalCount?: number;
+  assistantTraceSummary?: string;
 };
 
 export type CognitionWriteRequirementIssue = {
@@ -201,11 +222,6 @@ function readJsonObject(fullPath: string): Record<string, unknown> | null {
 function writeJsonObject(fullPath: string, content: Record<string, unknown>): void {
   mkdirSync(dirname(fullPath), { recursive: true });
   writeFileSync(fullPath, `${JSON.stringify(content, null, 2)}\n`, "utf8");
-}
-
-function appendJsonl(fullPath: string, content: Record<string, unknown>): void {
-  mkdirSync(dirname(fullPath), { recursive: true });
-  appendFileSync(fullPath, `${JSON.stringify(content)}\n`, "utf8");
 }
 
 function countJsonlEntries(fullPath: string): number {
@@ -1278,6 +1294,7 @@ export function finalizeSkillDecision(params: {
   decision: string;
   reason: string;
   replyText?: string;
+  diagnostics?: SkillDecisionDiagnostics;
   moderationDecision?: {
     kind: string;
     reason?: string;
@@ -1341,7 +1358,7 @@ export function finalizeSkillDecision(params: {
       const fullPath = resolveFullPath(decisionLogPath, baseDir);
       if (fullPath) {
         try {
-          appendJsonl(fullPath, {
+          appendJsonlRecord(fullPath, {
             schema_version: "1.0",
             ts: new Date().toISOString(),
             event_type: params.event.event_type,
@@ -1366,6 +1383,25 @@ export function finalizeSkillDecision(params: {
             decision: params.decision,
             reason: params.reason,
             reply_text: params.replyText ? truncateForLog(params.replyText, 400) : "",
+            raw_final_text: params.diagnostics?.rawFinalText ? truncateForLog(params.diagnostics.rawFinalText, 400) : "",
+            resolved_reply_text: params.diagnostics?.resolvedReplyText
+              ? truncateForLog(params.diagnostics.resolvedReplyText, 400)
+              : "",
+            raw_final_kind: params.diagnostics?.rawFinalKind ?? "",
+            normalized_protocol: params.diagnostics?.normalizedProtocol ?? "",
+            attempt_outcome_kind: params.diagnostics?.attemptOutcomeKind ?? "",
+            outward_outcome_kind: params.diagnostics?.outwardOutcomeKind ?? "",
+            resolution_action: params.diagnostics?.resolutionAction ?? "",
+            retry_attempted: params.diagnostics?.retryAttempted ?? false,
+            retry_reason: params.diagnostics?.retryReason ?? "",
+            dispatch_error: params.diagnostics?.dispatchError ? truncateForLog(params.diagnostics.dispatchError, 400) : "",
+            recovered_from_session_log: params.diagnostics?.recoveredFromSessionLog ?? false,
+            deliver_saw_final: params.diagnostics?.deliverSawFinal ?? false,
+            queued_final: params.diagnostics?.queuedFinal ?? false,
+            final_count: params.diagnostics?.finalCount ?? 0,
+            assistant_trace_summary: params.diagnostics?.assistantTraceSummary
+              ? truncateForLog(params.diagnostics.assistantTraceSummary, 400)
+              : "",
             moderation_decision: params.moderationDecision?.kind ?? "",
             moderation_reason: params.moderationDecision?.reason ?? "",
             moderation_scenario: params.moderationDecision?.scenario ?? "",
@@ -1374,6 +1410,10 @@ export function finalizeSkillDecision(params: {
             moderation_public_reply: params.moderationDecision?.publicReply ?? null,
             cognition_control_mode: "document_driven_llm",
             ...reasoningSummary,
+          }, {
+            maxEntries: DECISION_LOG_MAX_ENTRIES,
+            retainEntries: DECISION_LOG_RETAIN_ENTRIES,
+            archiveDropped: true,
           });
           appended.push(decisionLogPath);
         } catch (cause) {
@@ -1482,7 +1522,7 @@ export function finalizeSkillDecision(params: {
     const fullPath = resolveFullPath(decisionLogPath, baseDir);
     if (fullPath) {
       try {
-        appendJsonl(fullPath, {
+        appendJsonlRecord(fullPath, {
           schema_version: "1.0",
           ts: new Date().toISOString(),
           event_type: params.event.event_type,
@@ -1497,6 +1537,25 @@ export function finalizeSkillDecision(params: {
           decision: params.decision,
           reason: params.reason,
           reply_text: params.replyText ? truncateForLog(params.replyText, 400) : "",
+          raw_final_text: params.diagnostics?.rawFinalText ? truncateForLog(params.diagnostics.rawFinalText, 400) : "",
+          resolved_reply_text: params.diagnostics?.resolvedReplyText
+            ? truncateForLog(params.diagnostics.resolvedReplyText, 400)
+            : "",
+          raw_final_kind: params.diagnostics?.rawFinalKind ?? "",
+          normalized_protocol: params.diagnostics?.normalizedProtocol ?? "",
+          attempt_outcome_kind: params.diagnostics?.attemptOutcomeKind ?? "",
+          outward_outcome_kind: params.diagnostics?.outwardOutcomeKind ?? "",
+          resolution_action: params.diagnostics?.resolutionAction ?? "",
+          retry_attempted: params.diagnostics?.retryAttempted ?? false,
+          retry_reason: params.diagnostics?.retryReason ?? "",
+          dispatch_error: params.diagnostics?.dispatchError ? truncateForLog(params.diagnostics.dispatchError, 400) : "",
+          recovered_from_session_log: params.diagnostics?.recoveredFromSessionLog ?? false,
+          deliver_saw_final: params.diagnostics?.deliverSawFinal ?? false,
+          queued_final: params.diagnostics?.queuedFinal ?? false,
+          final_count: params.diagnostics?.finalCount ?? 0,
+          assistant_trace_summary: params.diagnostics?.assistantTraceSummary
+            ? truncateForLog(params.diagnostics.assistantTraceSummary, 400)
+            : "",
           moderation_decision: params.moderationDecision?.kind ?? "",
           moderation_reason: params.moderationDecision?.reason ?? "",
           moderation_scenario: params.moderationDecision?.scenario ?? "",
@@ -1505,6 +1564,10 @@ export function finalizeSkillDecision(params: {
           moderation_public_reply: params.moderationDecision?.publicReply ?? null,
           cognition_control_mode: "document_driven_llm",
           ...reasoningSummary,
+        }, {
+          maxEntries: DECISION_LOG_MAX_ENTRIES,
+          retainEntries: DECISION_LOG_RETAIN_ENTRIES,
+          archiveDropped: true,
         });
         appended.push(decisionLogPath);
       } catch (cause) {

@@ -25,7 +25,10 @@
       "Bash(log show:*)",
       "Bash(npx vitest:*)",
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(d['version']\\)\")",
-      "Bash(npm publish:*)"
+      "Bash(npm publish:*)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d, indent=2, ensure_ascii=False\\)\\)\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); providers=d.get\\('providers',{}\\); [print\\(k, providers[k].get\\('api',''\\), providers[k].get\\('baseUrl',''\\)\\) for k in providers if 'mini' in k.lower\\(\\) or 'max' in k.lower\\(\\)]\")",
+      "Bash(grep -v \"^$\")"
     ]
   }
 }

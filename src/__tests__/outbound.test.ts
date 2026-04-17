@@ -28,7 +28,24 @@ describe("chat43Outbound", () => {
     });
   });
 
-  it("suppresses cognition envelope text", async () => {
+  it("suppresses structured cognition json text", async () => {
+    const { sendMessage43Chat } = await import("../send.js");
+    const result = await chat43Outbound.sendText!({
+      cfg: {} as never,
+      to: "group:100",
+      text: "{\"writes\":[],\"reply\":\"NO_REPLY\"}",
+      accountId: "default",
+    } as never);
+
+    expect(sendMessage43Chat).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      channel: packageJson.openclaw.channel.id,
+      messageId: "suppressed",
+      chatId: "group:100",
+    });
+  });
+
+  it("still suppresses legacy cognition wrapper text", async () => {
     const { sendMessage43Chat } = await import("../send.js");
     const result = await chat43Outbound.sendText!({
       cfg: {} as never,

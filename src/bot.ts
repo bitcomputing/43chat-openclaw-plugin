@@ -15,6 +15,7 @@ import {
   inspectGroupMessageCognitionWriteRequirements,
   inspectPrivateMessageCognitionWriteRequirements,
   normalizeSkillCognitionWriteContent,
+  type SkillDecisionDiagnostics,
   updateSkillAgentRole,
   updateSkillCognitionFromEvent,
 } from "./cognition-bootstrap.js";
@@ -32,7 +33,9 @@ import {
   resolveSkillCognitionPolicy,
   resolveSkillModerationPolicy,
   resolveSkillReplyDelivery,
+  resolveSkillSessionVersion,
   shouldRequireStructuredModerationDecisionForRole,
+  type LoadedSkillRuntime,
   type SkillRuntimeModerationDecisionKind,
   type SkillRuntimeModerationStage,
   type SkillRuntimePromptBlock,
@@ -87,6 +90,13 @@ type CognitionEnvelopeModerationDecision = {
   stage?: SkillRuntimeModerationStage;
   targetUserId?: string;
   publicReply?: boolean;
+};
+
+type DispatchFinalNormalizationResult = {
+  cognitionEnvelope: CognitionWriteEnvelope | null;
+  finalReplyText: string;
+  rawFinalKind: "cognition_json" | "plain_text" | "empty";
+  normalizedProtocol: "verbatim" | "plain_no_reply_to_cognition_json" | "mixed_text_plus_cognition_json" | "text_plus_decision_json";
 };
 
 type DispatchAttemptOutcome =
@@ -156,36 +166,175 @@ export function describeFinalReplyResolutionForLog(params: {
   cognitionEnvelope: CognitionWriteEnvelope | null;
   finalReplyText: string;
   noReplyToken: string;
+  rawFinalKind?: "cognition_json" | "plain_text" | "empty";
+  normalizedProtocol?: "verbatim" | "plain_no_reply_to_cognition_json" | "mixed_text_plus_cognition_json" | "text_plus_decision_json";
 }): string {
-  const rawKind = params.cognitionEnvelope ? "cognition_envelope" : "plain_text";
+  const rawKind = params.rawFinalKind ?? (params.cognitionEnvelope ? "cognition_json" : "plain_text");
   const writesCount = params.cognitionEnvelope?.writes.length ?? 0;
+  const normalizedSuffix = params.normalizedProtocol && params.normalizedProtocol !== "verbatim"
+    ? ` normalized=${params.normalizedProtocol}`
+    : "";
   if (!params.finalReplyText) {
-    return `raw_kind=${rawKind} writes=${writesCount} outward=<empty>`;
+    return `raw_kind=${rawKind} writes=${writesCount} outward=<empty>${normalizedSuffix}`;
   }
   if (params.finalReplyText === params.noReplyToken) {
-    return `raw_kind=${rawKind} writes=${writesCount} outward=${params.noReplyToken}`;
+    return `raw_kind=${rawKind} writes=${writesCount} outward=${params.noReplyToken}${normalizedSuffix}`;
   }
-  return `raw_kind=${rawKind} writes=${writesCount} outward=${truncateForLog(params.finalReplyText, 240)}`;
+  return `raw_kind=${rawKind} writes=${writesCount} outward=${truncateForLog(params.finalReplyText, 240)}${normalizedSuffix}`;
 }
 
-function extractTextFromLlmLoggerOutputRecord(record: unknown): string {
+export function summarizeFinalOutcomeForLog(params: {
+  messageId: string;
+  decision: string;
+  reason: string;
+  diagnostics?: SkillDecisionDiagnostics;
+  moderationDecisionKind?: string;
+}): string {
+  const summary = {
+    message_id: params.messageId,
+    decision: params.decision,
+    reason: truncateForLog(params.reason, 240),
+    raw_final_kind: params.diagnostics?.rawFinalKind ?? "",
+    normalized_protocol: params.diagnostics?.normalizedProtocol ?? "",
+    raw_final_text: params.diagnostics?.rawFinalText ? truncateForLog(params.diagnostics.rawFinalText, 240) : "",
+    resolved_reply_text: params.diagnostics?.resolvedReplyText
+      ? truncateForLog(params.diagnostics.resolvedReplyText, 240)
+      : "",
+    attempt_outcome_kind: params.diagnostics?.attemptOutcomeKind ?? "",
+    outward_outcome_kind: params.diagnostics?.outwardOutcomeKind ?? "",
+    resolution_action: params.diagnostics?.resolutionAction ?? "",
+    retry_attempted: params.diagnostics?.retryAttempted ?? false,
+    retry_reason: params.diagnostics?.retryReason ?? "",
+    dispatch_error: params.diagnostics?.dispatchError ? truncateForLog(params.diagnostics.dispatchError, 240) : "",
+    recovered_from_session_log: params.diagnostics?.recoveredFromSessionLog ?? false,
+    deliver_saw_final: params.diagnostics?.deliverSawFinal ?? false,
+    queued_final: params.diagnostics?.queuedFinal ?? false,
+    final_count: params.diagnostics?.finalCount ?? 0,
+    assistant_trace_summary: params.diagnostics?.assistantTraceSummary
+      ? truncateForLog(params.diagnostics.assistantTraceSummary, 240)
+      : "",
+    moderation_decision: params.moderationDecisionKind ?? "",
+  };
+  return JSON.stringify(summary);
+}
+
+export type RecentAssistantOutputTrace = {
+  eventTs: string;
+  role: string;
+  contentCount: number;
+  blockTypes: string[];
+  textCount: number;
+  thinkingCount: number;
+  hasText: boolean;
+  hasThinking: boolean;
+  textPreview: string;
+  thinkingPreview: string;
+  finalText: string;
+  summary: string;
+  traceStatus:
+    | "found"
+    | "log_dir_missing"
+    | "log_dir_empty"
+    | "logger_files_missing"
+    | "no_candidate_records"
+    | "all_records_before_window"
+    | "nearest_before_window";
+};
+
+function buildEmptyAssistantTrace(
+  traceStatus: RecentAssistantOutputTrace["traceStatus"],
+  extra: Record<string, unknown> = {},
+): RecentAssistantOutputTrace {
+  return {
+    eventTs: "",
+    role: "",
+    contentCount: 0,
+    blockTypes: [],
+    textCount: 0,
+    thinkingCount: 0,
+    hasText: false,
+    hasThinking: false,
+    textPreview: "",
+    thinkingPreview: "",
+    finalText: "",
+    summary: JSON.stringify({
+      trace_status: traceStatus,
+      ...extra,
+    }),
+    traceStatus,
+  };
+}
+
+const SESSION_LOG_TIME_WINDOW_TOLERANCE_MS = 10_000;
+const SESSION_LOG_MAX_CANDIDATE_FILES = 4;
+const SESSION_LOG_TAIL_BYTES = 4_000_000;
+
+function inspectAssistantOutputRecord(record: unknown): RecentAssistantOutputTrace | null {
   if (!isPlainObject(record) || record.eventType !== "llm_output" || !isPlainObject(record.payload)) {
-    return "";
+    return null;
   }
   const lastAssistant = isPlainObject(record.payload.lastAssistant)
     ? record.payload.lastAssistant
     : null;
   const content = Array.isArray(lastAssistant?.content) ? lastAssistant.content : [];
-  return content
-    .map((entry) => {
-      if (!isPlainObject(entry) || entry.type !== "text") {
-        return "";
+  const blockTypes: string[] = [];
+  const textBlocks: string[] = [];
+  const thinkingBlocks: string[] = [];
+
+  for (const entry of content) {
+    if (!isPlainObject(entry)) {
+      continue;
+    }
+    const type = readOptionalString(entry.type) ?? "unknown";
+    blockTypes.push(type);
+    if (type === "text") {
+      const text = readOptionalString(entry.text) ?? "";
+      if (text) {
+        textBlocks.push(text);
       }
-      return readOptionalString(entry.text) ?? "";
-    })
-    .filter(Boolean)
-    .join("\n")
-    .trim();
+      continue;
+    }
+    if (type === "thinking") {
+      const thinking = readOptionalString(entry.thinking) ?? "";
+      if (thinking) {
+        thinkingBlocks.push(thinking);
+      }
+    }
+  }
+
+  const finalText = textBlocks.join("\n").trim();
+  const summaryPayload = {
+    event_ts: readOptionalString(record.ts) ?? "",
+    role: readOptionalString(lastAssistant?.role) ?? "",
+    content_count: content.length,
+    block_types: blockTypes,
+    text_count: textBlocks.length,
+    thinking_count: thinkingBlocks.length,
+    has_text: finalText.length > 0,
+    has_thinking: thinkingBlocks.length > 0,
+    text_preview: finalText ? truncateForLog(finalText, 240) : "",
+    thinking_preview: thinkingBlocks.length > 0 ? truncateForLog(thinkingBlocks.join("\n"), 160) : "",
+  };
+
+  return {
+    eventTs: summaryPayload.event_ts,
+    role: summaryPayload.role,
+    contentCount: summaryPayload.content_count,
+    blockTypes,
+    textCount: textBlocks.length,
+    thinkingCount: thinkingBlocks.length,
+    hasText: summaryPayload.has_text,
+    hasThinking: summaryPayload.has_thinking,
+    textPreview: summaryPayload.text_preview,
+    thinkingPreview: summaryPayload.thinking_preview,
+    finalText: unwrapFinalReplyTag(finalText),
+    summary: JSON.stringify(summaryPayload),
+    traceStatus: "found",
+  };
+}
+
+function extractTextFromLlmLoggerOutputRecord(record: unknown): string {
+  return inspectAssistantOutputRecord(record)?.finalText ?? "";
 }
 
 function unwrapFinalReplyTag(text: string): string {
@@ -197,56 +346,22 @@ function unwrapFinalReplyTag(text: string): string {
   return (match[1] ?? "").trim();
 }
 
-function extractLegacyXmlEnvelopeBlock(raw: string, tagName: string): string | undefined {
-  const match = raw.match(new RegExp(`<${tagName}>([\\s\\S]*?)</${tagName}>`, "i"));
-  return match?.[1]?.trim();
-}
-
-function parseLegacyXmlStyleCognitionEnvelope(raw: string): CognitionWriteEnvelope | null {
-  const replyText = extractLegacyXmlEnvelopeBlock(raw, "reply");
-  const writesRaw = extractLegacyXmlEnvelopeBlock(raw, "writes");
-  const decisionRaw = extractLegacyXmlEnvelopeBlock(raw, "decision");
-
-  if (replyText === undefined && writesRaw === undefined && decisionRaw === undefined) {
-    return null;
-  }
-
-  let writes: Array<{ path: string; content: Record<string, unknown> }> = [];
-  if (writesRaw !== undefined) {
-    try {
-      const parsedWrites = parseLooseCognitionEnvelopeJson(writesRaw);
-      const normalizedWrites = parseEnvelopeWrites(parsedWrites);
-      if (!normalizedWrites) {
-        return null;
-      }
-      writes = normalizedWrites;
-    } catch {
-      return null;
-    }
-  }
-
-  let decision: CognitionEnvelopeModerationDecision | undefined;
-  if (decisionRaw !== undefined) {
-    try {
-      const parsedDecision = parseLooseCognitionEnvelopeJson(decisionRaw);
-      decision = parseCognitionEnvelopeDecision(parsedDecision)
-        ?? parseLegacyCognitionEnvelopeModerationDecision(parsedDecision);
-    } catch {
-      return null;
-    }
-  }
-
-  return {
-    writes,
-    replyText: replyText ?? "",
-    ...(decision ? { decision } : {}),
-  };
-}
-
 export function extractReusableOutwardReplyText(text: string): string {
   const parsedEnvelope = parseCognitionWriteEnvelope(text);
   if (parsedEnvelope) {
     return parsedEnvelope.replyText.trim();
+  }
+  const trailingEnvelope = extractTrailingCognitionEnvelope(text);
+  if (trailingEnvelope) {
+    return trailingEnvelope.envelope.replyText.trim();
+  }
+  const malformedTrailingEnvelope = extractMalformedTrailingStructuredEnvelope(text);
+  if (malformedTrailingEnvelope) {
+    return malformedTrailingEnvelope.envelope.replyText.trim();
+  }
+  const extractedReplyText = extractFallbackReplyTextFromStructuredCognition(text);
+  if (extractedReplyText !== undefined) {
+    return extractedReplyText.trim();
   }
   return unwrapFinalReplyTag(text).trim();
 }
@@ -256,33 +371,77 @@ export function recoverRecentFinalReplyFromSessionLog(params: {
   sinceTimestamp: number;
   env?: NodeJS.ProcessEnv;
 }): string {
+  return inspectRecentAssistantOutputFromSessionLog(params)?.finalText ?? "";
+}
+
+export function inspectRecentAssistantOutputFromSessionLog(params: {
+  sessionKey: string;
+  sinceTimestamp: number;
+  env?: NodeJS.ProcessEnv;
+}): RecentAssistantOutputTrace | null {
   const logDir = resolveSessionLogDir(params.sessionKey, params.env);
   if (!existsSync(logDir)) {
-    return "";
+    return buildEmptyAssistantTrace("log_dir_missing", { log_dir: logDir });
   }
 
-  const candidates = readdirSync(logDir)
+  const entries = readdirSync(logDir);
+  if (entries.length === 0) {
+    return buildEmptyAssistantTrace("log_dir_empty", { log_dir: logDir, entry_count: 0 });
+  }
+
+  const candidates = entries
     .filter((name) => /^llm-logger-openclaw-plugin-\d{4}-\d{2}-\d{2}\.jsonl$/.test(name))
     .sort()
     .reverse()
-    .slice(0, 2);
+    .slice(0, SESSION_LOG_MAX_CANDIDATE_FILES);
+  if (candidates.length === 0) {
+    return buildEmptyAssistantTrace("logger_files_missing", {
+      log_dir: logDir,
+      entry_count: entries.length,
+      sample_entries: entries.slice(0, 5),
+    });
+  }
+  let sawCandidateRecord = false;
+  let stoppedByWindow = false;
+  let nearestBeforeWindow: RecentAssistantOutputTrace | null = null;
 
   for (const fileName of candidates) {
     try {
       const raw = readFileSync(join(logDir, fileName), "utf8");
-      const tail = raw.length > 1_000_000 ? raw.slice(-1_000_000) : raw;
+      const tail = raw.length > SESSION_LOG_TAIL_BYTES ? raw.slice(-SESSION_LOG_TAIL_BYTES) : raw;
       const lines = tail.split("\n").filter(Boolean);
       for (let index = lines.length - 1; index >= 0; index -= 1) {
         const line = lines[index];
         try {
           const record = JSON.parse(line) as unknown;
           const ts = isPlainObject(record) ? Date.parse(readOptionalString(record.ts) ?? "") : Number.NaN;
-          if (Number.isFinite(ts) && ts < params.sinceTimestamp - 1_000) {
+          const trace = inspectAssistantOutputRecord(record);
+          if (trace && Number.isFinite(ts) && ts < params.sinceTimestamp - SESSION_LOG_TIME_WINDOW_TOLERANCE_MS) {
+            if (!nearestBeforeWindow) {
+              nearestBeforeWindow = {
+                ...trace,
+                traceStatus: "nearest_before_window",
+                summary: JSON.stringify({
+                  trace_status: "nearest_before_window",
+                  nearest_event_ts: trace.eventTs,
+                  role: trace.role,
+                  content_count: trace.contentCount,
+                  block_types: trace.blockTypes,
+                  text_count: trace.textCount,
+                  thinking_count: trace.thinkingCount,
+                  has_text: trace.hasText,
+                  has_thinking: trace.hasThinking,
+                  text_preview: trace.textPreview,
+                  thinking_preview: trace.thinkingPreview,
+                }),
+              };
+            }
+            stoppedByWindow = true;
             break;
           }
-          const text = extractTextFromLlmLoggerOutputRecord(record);
-          if (text) {
-            return unwrapFinalReplyTag(text);
+          if (trace) {
+            sawCandidateRecord = true;
+            return trace;
           }
         } catch {
           continue;
@@ -293,7 +452,18 @@ export function recoverRecentFinalReplyFromSessionLog(params: {
     }
   }
 
-  return "";
+  if (nearestBeforeWindow) {
+    return nearestBeforeWindow;
+  }
+
+  const traceStatus = stoppedByWindow && !sawCandidateRecord
+    ? "all_records_before_window"
+    : "no_candidate_records";
+  return buildEmptyAssistantTrace(traceStatus, {
+    log_dir: logDir,
+    candidate_file_count: candidates.length,
+    candidate_files: candidates,
+  });
 }
 
 function mapGroupRoleName(roleValue?: number, roleNameValue?: string): string | undefined {
@@ -556,6 +726,7 @@ function buildInboundDescriptor(
     case "group_invitation": {
       const data = event.data as Chat43GroupInvitationEventData;
       const groupId = String(data.group_id);
+      const groupName = data.group_name || `群${groupId}`;
       const applicantUserId = String(data.inviter_id);
       const applicantName = data.inviter_name || applicantUserId;
       const roleName = resolveGroupRoleName({
@@ -569,7 +740,7 @@ function buildInboundDescriptor(
         accountId: options?.accountId,
         roleName,
         groupId,
-        groupName: data.group_name || `群${groupId}`,
+        groupName,
         userId: applicantUserId,
         senderName: applicantName,
         extraPromptBlocks: options?.extraPromptBlocks,
@@ -641,7 +812,7 @@ function buildInboundDescriptor(
         senderName: data.nickname || userId,
         text: defaultText,
         timestamp: data.timestamp || event.timestamp || Date.now(),
-        groupSubject: data.group_name || groupId,
+        groupSubject: groupId,
         conversationLabel: `group:${groupId}`,
         groupSystemPrompt: skillContext.prompt,
         suppressTextReply: skillContext.replyMode === "suppress_text_reply",
@@ -778,18 +949,6 @@ function parseCognitionEnvelopeDecision(value: unknown): CognitionEnvelopeModera
   return parsed;
 }
 
-function parseLegacyCognitionEnvelopeModerationDecision(
-  value: unknown,
-): CognitionEnvelopeModerationDecision | undefined {
-  if (typeof value === "string") {
-    return isModerationDecisionKind(value)
-      ? { kind: value }
-      : undefined;
-  }
-
-  return parseCognitionEnvelopeDecision(value);
-}
-
 function resolveEventIsoTime(event: Chat43AnySSEEvent): string {
   const dataTimestamp = isPlainObject(event.data) && typeof event.data.timestamp === "number"
     ? event.data.timestamp
@@ -828,30 +987,98 @@ export function resolveCognitionFullPath(pathValue: string): string | null {
   return fullPath;
 }
 
-function repairXmlCorruptedJsonKeys(raw: string): string {
-  // MiniMax sometimes outputs `<writes":` or `<chat43-writes":` instead of `"writes":`
-  return raw.replace(/<(?:chat43-)?([a-z_]+)"(\s*:)/gi, '"$1"$2');
-}
-
 export function parseCognitionWriteEnvelope(text: string): CognitionWriteEnvelope | null {
-  const match = text.match(/<chat43-cognition>\s*([\s\S]*?)\s*<\/chat43-cognition>/i)
-    ?? text.match(/```chat43-cognition\s*([\s\S]*?)```/i);
-  if (!match) {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const jsonFenceMatch = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  const rawCandidate = jsonFenceMatch?.[1] ?? trimmed;
+  const normalizedCandidate = rawCandidate.trim();
+  if (!normalizedCandidate.startsWith("{") || !normalizedCandidate.endsWith("}")) {
     return null;
   }
 
-  const inner = repairXmlCorruptedJsonKeys(match[1]);
+  return parseCognitionWriteEnvelopeCandidate(normalizedCandidate, "");
+}
 
+function parseCognitionWriteEnvelopeCandidate(
+  normalizedCandidate: string,
+  fallbackReplyText: string,
+): CognitionWriteEnvelope | null {
   try {
-    const parsed = parseLooseCognitionEnvelopeJson(inner) as unknown;
+    const parsed = parseLooseCognitionEnvelopeJson(normalizedCandidate) as unknown;
     return normalizeParsedCognitionWriteEnvelope({
       parsed,
-      fallbackReplyText: text.replace(match[0], "").trim(),
+      fallbackReplyText,
     });
   } catch {
-    return parseMalformedCognitionWriteEnvelope(inner)
-      ?? parseLegacyXmlStyleCognitionEnvelope(inner);
+    return parseMalformedCognitionWriteEnvelope(normalizedCandidate, fallbackReplyText);
   }
+}
+
+export function normalizeDispatchFinalOutput(params: {
+  rawFinalText: string;
+  noReplyToken: string;
+}): DispatchFinalNormalizationResult {
+  const trimmed = params.rawFinalText.trim();
+  if (!trimmed) {
+    return {
+      cognitionEnvelope: null,
+      finalReplyText: "",
+      rawFinalKind: "empty",
+      normalizedProtocol: "verbatim",
+    };
+  }
+
+  const parsedEnvelope = parseCognitionWriteEnvelope(trimmed);
+  if (parsedEnvelope) {
+    return {
+      cognitionEnvelope: parsedEnvelope,
+      finalReplyText: parsedEnvelope.replyText.trim(),
+      rawFinalKind: "cognition_json",
+      normalizedProtocol: "verbatim",
+    };
+  }
+
+  const trailingEnvelope = extractTrailingCognitionEnvelope(trimmed);
+  if (trailingEnvelope) {
+    return {
+      cognitionEnvelope: trailingEnvelope.envelope,
+      finalReplyText: trailingEnvelope.envelope.replyText.trim(),
+      rawFinalKind: "plain_text",
+      normalizedProtocol: trailingEnvelope.protocol,
+    };
+  }
+
+  const malformedTrailingEnvelope = extractMalformedTrailingStructuredEnvelope(trimmed);
+  if (malformedTrailingEnvelope) {
+    return {
+      cognitionEnvelope: malformedTrailingEnvelope.envelope,
+      finalReplyText: malformedTrailingEnvelope.envelope.replyText.trim(),
+      rawFinalKind: "plain_text",
+      normalizedProtocol: malformedTrailingEnvelope.protocol,
+    };
+  }
+
+  if (trimmed === params.noReplyToken) {
+    return {
+      cognitionEnvelope: {
+          writes: [],
+        replyText: params.noReplyToken,
+      },
+      finalReplyText: params.noReplyToken,
+      rawFinalKind: "plain_text",
+      normalizedProtocol: "plain_no_reply_to_cognition_json",
+    };
+  }
+
+  return {
+    cognitionEnvelope: null,
+    finalReplyText: extractReusableOutwardReplyText(trimmed),
+    rawFinalKind: "plain_text",
+    normalizedProtocol: "verbatim",
+  };
 }
 
 function normalizeParsedCognitionWriteEnvelope(params: {
@@ -862,25 +1089,117 @@ function normalizeParsedCognitionWriteEnvelope(params: {
     return null;
   }
 
-  const nestedEnvelope = isPlainObject(params.parsed.envelope) ? params.parsed.envelope : null;
-  const writes = parseEnvelopeWrites(params.parsed.writes ?? nestedEnvelope?.writes);
+  const hasEnvelopeShape = Object.hasOwn(params.parsed, "writes")
+    || Object.hasOwn(params.parsed, "reply")
+    || Object.hasOwn(params.parsed, "decision");
+  if (!hasEnvelopeShape) {
+    return null;
+  }
+
+  if (Object.hasOwn(params.parsed, "envelope")) {
+    return null;
+  }
+  if (Object.hasOwn(params.parsed, "moderation")) {
+    return null;
+  }
+
+  const writes = parseEnvelopeWrites(params.parsed.writes);
   if (!writes) {
     return null;
   }
 
   const replyText = readOptionalString(params.parsed.reply)
-    ?? readOptionalString(nestedEnvelope?.reply)
     ?? params.fallbackReplyText;
-  const decision = parseCognitionEnvelopeDecision(params.parsed.decision)
-    ?? parseCognitionEnvelopeDecision(nestedEnvelope?.decision)
-    ?? parseLegacyCognitionEnvelopeModerationDecision(params.parsed.moderation)
-    ?? parseLegacyCognitionEnvelopeModerationDecision(nestedEnvelope?.moderation);
+  const decision = parseCognitionEnvelopeDecision(params.parsed.decision);
 
   return {
     writes,
     replyText: replyText ?? "",
     ...(decision ? { decision } : {}),
   };
+}
+
+function extractTrailingCognitionEnvelope(text: string): {
+  envelope: CognitionWriteEnvelope;
+  leadingText: string;
+  protocol: DispatchFinalNormalizationResult["normalizedProtocol"];
+} | null {
+  const trimmed = text.trim();
+  if (!trimmed.endsWith("}")) {
+    return null;
+  }
+
+  for (let index = trimmed.lastIndexOf("{"); index >= 0; index = trimmed.lastIndexOf("{", index - 1)) {
+    const candidate = trimmed.slice(index).trim();
+    if (!candidate.startsWith("{") || !candidate.endsWith("}")) {
+      continue;
+    }
+    const leadingText = trimmed.slice(0, index).trim();
+    if (!leadingText) {
+      continue;
+    }
+    const envelope = parseCognitionWriteEnvelopeCandidate(candidate, leadingText);
+    if (!envelope) {
+      continue;
+    }
+    return {
+      envelope,
+      leadingText,
+      protocol: /"reply"\s*:|\"writes\"\s*:/i.test(candidate)
+        ? "mixed_text_plus_cognition_json"
+        : "text_plus_decision_json",
+    };
+  }
+
+  return null;
+}
+
+function findTrailingStructuredJsonStartIndexes(text: string): number[] {
+  const indexes: number[] = [];
+  const pattern = /\{\s*"(?:decision|reply|writes|envelope)"\s*:/giu;
+  for (const match of text.matchAll(pattern)) {
+    if (typeof match.index === "number") {
+      indexes.push(match.index);
+    }
+  }
+  return indexes;
+}
+
+function extractMalformedTrailingStructuredEnvelope(text: string): {
+  envelope: CognitionWriteEnvelope;
+  leadingText: string;
+  protocol: DispatchFinalNormalizationResult["normalizedProtocol"];
+} | null {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const indexes = findTrailingStructuredJsonStartIndexes(trimmed);
+  for (let cursor = indexes.length - 1; cursor >= 0; cursor -= 1) {
+    const index = indexes[cursor]!;
+    const candidate = trimmed.slice(index).trim();
+    const leadingText = trimmed.slice(0, index).trim();
+    if (!candidate.startsWith("{")) {
+      continue;
+    }
+    if (!/"(?:decision|reply|writes|envelope)"\s*:/iu.test(candidate)) {
+      continue;
+    }
+
+    return {
+      envelope: {
+        writes: [],
+        replyText: leadingText,
+      },
+      leadingText,
+      protocol: /"reply"\s*:|\"writes\"\s*:|\"envelope\"\s*:/i.test(candidate)
+        ? "mixed_text_plus_cognition_json"
+        : "text_plus_decision_json",
+    };
+  }
+
+  return null;
 }
 
 function parseEnvelopeWrites(value: unknown): Array<{ path: string; content: Record<string, unknown> }> | null {
@@ -910,15 +1229,14 @@ function parseEnvelopeWrites(value: unknown): Array<{ path: string; content: Rec
     .filter((entry): entry is { path: string; content: Record<string, unknown> } => Boolean(entry));
 }
 
-function parseMalformedCognitionWriteEnvelope(raw: string): CognitionWriteEnvelope | null {
+function parseMalformedCognitionWriteEnvelope(raw: string, fallbackReplyText = ""): CognitionWriteEnvelope | null {
   const replyText = extractMalformedEnvelopeReplyText(raw);
   const writes = parseEnvelopeWrites(parseMalformedJsonValue(raw, "writes"));
   if (!writes) {
     return null;
   }
 
-  const decision = parseCognitionEnvelopeDecision(parseMalformedJsonValue(raw, "decision"))
-    ?? parseLegacyCognitionEnvelopeModerationDecision(parseMalformedJsonValue(raw, "moderation"));
+  const decision = parseCognitionEnvelopeDecision(parseMalformedJsonValue(raw, "decision"));
 
   if (replyText === undefined && !decision && writes.length === 0) {
     return null;
@@ -926,7 +1244,7 @@ function parseMalformedCognitionWriteEnvelope(raw: string): CognitionWriteEnvelo
 
   return {
     writes,
-    replyText: replyText ?? "",
+    replyText: replyText ?? fallbackReplyText,
     ...(decision ? { decision } : {}),
   };
 }
@@ -954,8 +1272,8 @@ function extractMalformedQuotedStringField(raw: string, key: string): string | u
 
     const suffix = raw.slice(index + 1);
     if (
-      /^\s*,\s*"(?:writes|decision|moderation|reply)"\s*:/i.test(suffix)
-      || /^\s*}\s*,\s*"(?:writes|decision|moderation)"\s*:/i.test(suffix)
+      /^\s*,\s*"(?:writes|decision|reply)"\s*:/i.test(suffix)
+      || /^\s*}\s*,\s*"(?:writes|decision)"\s*:/i.test(suffix)
       || /^\s*}\s*$/i.test(suffix)
       || /^\s*$/i.test(suffix)
     ) {
@@ -1261,7 +1579,7 @@ function applyCognitionWriteEnvelope(params: {
   for (const write of params.envelope.writes) {
     const fullPath = resolveCognitionFullPath(write.path);
     if (!fullPath) {
-      params.error(`43chat[${params.accountId}]: cognition envelope path rejected ${write.path}`);
+      params.error(`43chat[${params.accountId}]: cognition json path rejected ${write.path}`);
       continue;
     }
 
@@ -1284,12 +1602,12 @@ function applyCognitionWriteEnvelope(params: {
       writeFileSync(fullPath, `${JSON.stringify(content, null, 2)}\n`, "utf8");
       written.push(write.path);
     } catch (cause) {
-      params.error(`43chat[${params.accountId}]: failed to apply cognition envelope ${write.path}: ${String(cause)}`);
+      params.error(`43chat[${params.accountId}]: failed to apply cognition json ${write.path}: ${String(cause)}`);
     }
   }
 
   if (written.length > 0) {
-    params.log(`43chat[${params.accountId}]: applied cognition envelope writes ${written.join(", ")}`);
+    params.log(`43chat[${params.accountId}]: applied cognition json writes ${written.join(", ")}`);
   }
 
   return written;
@@ -1395,10 +1713,15 @@ function buildMissingCognitionPromptBlocks(
     lines: [
       `当前仍缺失的认知槽位: ${missingSummaries.join(" / ")}`,
       ...missingRequirements,
-      "这不是可选优化；如果你本轮判断需要回复，就必须把长期认知和回复一起放进同一个 cognition envelope。",
-      "如果当前消息需要正常公开回复，不要输出 `<final>`；请把完整公开回复文本写进 envelope 的 `reply` 字段里，插件会发送这个 `reply`。",
+      "这不是可选优化；如果你本轮判断需要回复，就必须把长期认知和回复一起放进同一个结构化 JSON。",
+      "如果当前消息需要正常公开回复，不要输出 `<final>`；请把完整公开回复文本写进 JSON 的 `reply` 字段里，插件会发送这个 `reply`。",
       "不要只输出普通文本回复；缺失槽位仍存在时，普通文本会被插件直接拦截。",
-      "最终输出必须以 `<chat43-cognition>{...}</chat43-cognition>` 开头，标签里放合法 JSON。",
+      "最终输出必须是一个纯 JSON 对象，不要添加 `<chat43-cognition>`、markdown 代码块、解释或任何前后缀。",
+      "最终输出首字符必须是 `{`，末字符必须是 `}`；顶层不要出现 `envelope`、`moderation`、`parameter`、`_meta` 等字段。",
+      "失败示例：裸 `NO_REPLY`、`好的 {\"reply\":\"...\"}`、markdown 代码块 JSON、`{\"envelope\":{...}}` 都算协议错误。",
+      "先完成判断，再一次性输出整个 JSON；不要先写一句自然语言，再补第二段 JSON。",
+      "最终输出必须能被标准 `JSON.parse` 成功解析；若发现少括号、少引号、尾部缺失或字段不闭合，先修正，再输出。",
+      "输出前先自检一次：确认首字符是 `{`、末字符是 `}`，并且整个文本可被 `JSON.parse` 成功解析。",
       `这个 JSON 必须是 { "writes": [{"path":"groups/...json","content":{...}}], "reply": "..." }；若本轮不回复，则 reply 写为 "${noReplyToken}"。`,
     ],
   }];
@@ -1415,35 +1738,63 @@ function buildEnvelopeRetryPromptBlocks(params: {
   const missingSummaryLine = params.missingSummaries.length > 0
     ? `当前仍缺失的认知槽位: ${params.missingSummaries.join(" / ")}`
     : (writesRequired
-      ? "当前消息没有新的缺失槽位；若你输出 cognition envelope，仍需保持结构合法。"
+        ? "当前消息没有新的缺失槽位；若你输出结构化 JSON，仍需保持结构合法。"
       : "当前没有额外的长期认知写入要求；若只需返回管理决策，`writes` 直接写空数组 `[]`。");
   const reusablePriorReplyText = extractReusableOutwardReplyText(params.priorReplyText);
 
   return [{
     title: "认知 Envelope 重试",
-    lines: [
-      writesRequired
-        ? "上一轮输出格式无效：当前仍有必须写入的长期认知，但你输出了普通文本或普通 `NO_REPLY`。"
-        : "上一轮输出格式无效：本轮必须显式返回结构化管理决策，但你输出了普通文本或普通 `NO_REPLY`。",
-      "本轮必须只输出一个 `<chat43-cognition>{...}</chat43-cognition>` envelope，不能输出裸文本，不能输出 `<final>...</final>`。",
-      "唯一合法示例：`<chat43-cognition>{\"envelope\":{\"reply\":\"你好\"},\"writes\":[]}</chat43-cognition>`。",
-      "不要输出 `<thinking>`、`<envelope>`、`<reply>`、`<writes>` 这类 XML 标签；标签内部必须是合法 JSON。",
-      "如果当前消息需要公开回复，把完整公开回复文本放进 envelope.reply；插件只会对外发送这个 `reply`。",
-      `如果当前消息不该公开回复，envelope.reply 必须写为 "${params.noReplyToken}"。`,
-      writesRequired
-        ? "writes 里必须补齐当前缺失的长期认知。"
-        : "当前 envelope 里的 `writes` 可以为空数组 `[]`；不要借此回写群聊长期认知。",
-      ...(params.moderationDecisionRequired
-        ? [
-          "你当前处于文档声明的管理决策强制模式，本轮 envelope 里必须带 `decision` 字段。",
-          "如果消息命中文档里的管理场景，`decision.scenario` / `decision.stage` / `decision.kind` 必须与 runtime 一致；如果未命中，也必须显式输出 `decision.kind = observe`。",
-        ]
-        : []),
-      missingSummaryLine,
-      reusablePriorReplyText
-        ? `你上一轮的公开回复纯文本候选如下；若内容合适，请只复用这段文字到 envelope.reply：${reusablePriorReplyText}`
-        : "你上一轮没有形成可发送的公开回复；如本轮也不需要公开回复，请把 envelope.reply 写为 NO_REPLY。",
-    ],
+    lines: writesRequired
+      ? [
+        "上一轮输出格式无效：当前仍有必须写入的长期认知，但你输出了普通文本或普通 `NO_REPLY`。",
+        "本轮必须只输出一个纯 JSON 对象，不能输出裸文本，不能输出 `<final>...</final>`，不能输出 `<chat43-cognition>` 标签。",
+        "唯一合法示例：`{\"reply\":\"你好\",\"writes\":[]}`。",
+        "最终输出首字符必须是 `{`，末字符必须是 `}`；不要在 JSON 前后添加任何额外文字。",
+        "顶层只允许 `reply`、`writes`、`decision` 三个字段；不要输出 `envelope`、`moderation`、`parameter`、`_meta`、`chat43_mentions` 等额外字段。",
+        "不要输出 `<thinking>`、`<envelope>`、`<reply>`、`<writes>`、`<chat43-cognition>` 这类 XML 标签。",
+        "失败示例：裸 `NO_REPLY`、`好的 {\"reply\":\"...\"}`、markdown 代码块 JSON、`{\"envelope\":{...}}` 都算协议错误。",
+        "先完成判断，再一次性输出整个 JSON；不要先写一句自然语言，再补第二段 JSON。",
+        "最终输出必须能被标准 `JSON.parse` 成功解析；若发现少括号、少引号、尾部缺失或字段不闭合，先修正，再输出。",
+        "输出前先自检一次：确认首字符是 `{`、末字符是 `}`，并且整个文本可被 `JSON.parse` 成功解析。",
+        "如果当前消息需要公开回复，把完整公开回复文本放进 reply；插件只会对外发送这个 `reply`。",
+        `如果当前消息不该公开回复，reply 必须写为 "${params.noReplyToken}"。`,
+        "writes 里必须补齐当前缺失的长期认知。",
+        ...(params.moderationDecisionRequired
+          ? [
+            "你当前处于文档声明的管理决策强制模式，本轮 JSON 里必须带 `decision` 字段。",
+            "`decision.kind` 只能是 `observe` / `no_reply` / `redirect` / `warn` / `mark_risk` / `remove_member`。",
+            "如果消息命中文档里的管理场景，`decision.scenario` / `decision.stage` / `decision.kind` 必须与 runtime 一致；如果未命中，也必须显式输出 `decision.kind = observe`。",
+          ]
+          : []),
+        missingSummaryLine,
+        reusablePriorReplyText
+          ? `你上一轮的公开回复纯文本候选如下；若内容合适，请只复用这段文字到 reply：${reusablePriorReplyText}`
+          : `你上一轮没有形成可发送的公开回复；如本轮也不需要公开回复，请把 reply 写为 ${params.noReplyToken}。`,
+      ]
+      : [
+        "上一轮输出格式无效：本轮必须显式返回结构化管理决策，但你没有按“正文/NO_REPLY + decision JSON”协议输出。",
+        "本轮最终输出必须改成两段：先输出真正要公开发送的正文文本或 `NO_REPLY`，最后再输出一个只包含 `decision` 的纯 JSON 对象。",
+        "唯一合法示例：`你好\\n{\"decision\":{\"kind\":\"observe\",\"reason\":\"正常回应\"}}`。",
+        `如果当前消息不该公开回复，正文就直接写 "${params.noReplyToken}"。`,
+        "最后一个非空块必须是 JSON，且不要在这个 JSON 后面再补任何额外文字。",
+        "最后那个 JSON 顶层只允许 `decision`；不要输出 `reply`、`writes`、`envelope`、`moderation`、`parameter`、`_meta`、`chat43_mentions` 等额外字段。",
+        "不要输出 `<thinking>`、`<envelope>`、`<reply>`、`<writes>`、`<chat43-cognition>` 这类 XML 标签。",
+        "失败示例：只输出纯 JSON、`好的 {\"decision\":...}`、markdown 代码块 JSON、`{\"envelope\":{...}}` 都算协议错误。",
+        "先完成判断，再一次性输出：前面是正文，最后一个非空块必须是 JSON；不要先写一句自然语言，再补第二段 JSON。",
+        "最后那个 JSON 必须能被标准 `JSON.parse` 成功解析；若发现少括号、少引号、尾部缺失或字段不闭合，先修正，再输出。",
+        "输出前先自检一次：确认最后一个非空块首字符是 `{`、末字符是 `}`，并且整个 JSON 可被 `JSON.parse` 成功解析。",
+        ...(params.moderationDecisionRequired
+          ? [
+            "你当前处于文档声明的管理决策强制模式，最后那个 JSON 里必须带 `decision` 字段。",
+            "`decision.kind` 只能是 `observe` / `no_reply` / `redirect` / `warn` / `mark_risk` / `remove_member`。",
+            "如果消息命中文档里的管理场景，`decision.scenario` / `decision.stage` / `decision.kind` 必须与 runtime 一致；如果未命中，也必须显式输出 `decision.kind = observe`。",
+          ]
+          : []),
+        missingSummaryLine,
+        reusablePriorReplyText
+          ? `你上一轮的公开回复纯文本候选如下；若内容合适，请直接复用这段文字作为 JSON 前面的正文：${reusablePriorReplyText}`
+          : `你上一轮没有形成可发送的公开回复；如本轮也不需要公开回复，请把正文写成 ${params.noReplyToken}。`,
+      ],
   }];
 }
 
@@ -1453,7 +1804,7 @@ function buildEmptyReplyRetryPromptBlocks(params: {
   requireCognitionEnvelope?: boolean;
 }): SkillRuntimePromptBlock[] {
   const expectedReplyForms = params.requireCognitionEnvelope
-    ? "一个合法的 `<chat43-cognition>{...}</chat43-cognition>` envelope。"
+    ? "一个合法的纯 JSON 对象。"
     : "普通文本或 `NO_REPLY`。";
   const reusablePriorReplyText = extractReusableOutwardReplyText(params.priorReplyText);
   return [{
@@ -1463,9 +1814,14 @@ function buildEmptyReplyRetryPromptBlocks(params: {
       `本轮必须给出一个明确可发送结果：${expectedReplyForms}`,
       ...(params.requireCognitionEnvelope
         ? [
-          "唯一合法示例：`<chat43-cognition>{\"envelope\":{\"reply\":\"你好\"},\"writes\":[]}</chat43-cognition>`。",
-          "如果需要公开回复，把完整文本放进 envelope.reply；如果不该公开回复，就把 envelope.reply 写成 `NO_REPLY`。",
-          "不要输出 `<thinking>`、`<envelope>`、`<reply>`、`<writes>` 这类 XML 标签；标签内部必须是合法 JSON。",
+          "唯一合法示例：`{\"reply\":\"你好\",\"writes\":[]}`。",
+          "如果需要公开回复，把完整文本放进 reply；如果不该公开回复，就把 reply 写成 `NO_REPLY`。",
+          "最终输出首字符必须是 `{`，末字符必须是 `}`；顶层只允许 `reply`、`writes`、`decision` 三个字段。",
+          "不要输出 `<thinking>`、`<envelope>`、`<reply>`、`<writes>`、`<chat43-cognition>` 这类 XML 标签。",
+          "失败示例：裸 `NO_REPLY`、`好的 {\"reply\":\"...\"}`、markdown 代码块 JSON、`{\"envelope\":{...}}` 都算协议错误。",
+          "先完成判断，再一次性输出整个 JSON；不要先写一句自然语言，再补第二段 JSON。",
+          "最终输出必须能被标准 `JSON.parse` 成功解析；若发现少括号、少引号、尾部缺失或字段不闭合，先修正，再输出。",
+          "输出前先自检一次：确认首字符是 `{`、末字符是 `}`，并且整个文本可被 `JSON.parse` 成功解析。",
           "不要输出裸文本、不要输出裸 `NO_REPLY`、不要让最终回复留空。",
         ]
         : ["不要只输出空白、不要只思考不输出、不要让最终回复留空。"]),
@@ -1476,41 +1832,120 @@ function buildEmptyReplyRetryPromptBlocks(params: {
   }];
 }
 
-function resolveGroupFinalReplyText(text: string): string {
-  const envelope = parseCognitionWriteEnvelope(text);
-  if (!envelope) {
-    return unwrapFinalReplyTag(text);
+function looksLikeStructuredCognitionReply(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
   }
-  return envelope.replyText.trim();
+  if (extractTrailingCognitionEnvelope(trimmed)) {
+    return true;
+  }
+  if (extractMalformedTrailingStructuredEnvelope(trimmed)) {
+    return true;
+  }
+  if (
+    /<chat43-cognition>/i.test(trimmed)
+    || /```chat43-cognition/i.test(trimmed)
+  ) {
+    return true;
+  }
+
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  const candidate = (fenced?.[1] ?? trimmed).trim();
+  if (!candidate.startsWith("{") || !candidate.endsWith("}")) {
+    return /^\{\s*"(?:decision|reply|writes|envelope)"\s*:/iu.test(candidate);
+  }
+
+  return /"reply"\s*:/i.test(candidate)
+    && (/"writes"\s*:/i.test(candidate) || /"decision"\s*:/i.test(candidate) || /"envelope"\s*:/i.test(candidate));
+}
+
+function extractFallbackReplyTextFromStructuredCognition(text: string): string | undefined {
+  const trailingEnvelope = extractTrailingCognitionEnvelope(text);
+  if (trailingEnvelope) {
+    return trailingEnvelope.envelope.replyText.trim();
+  }
+  if (!looksLikeStructuredCognitionReply(text)) {
+    return undefined;
+  }
+
+  const trimmed = text.trim();
+  const wrapped = trimmed.match(/<chat43-cognition>\s*([\s\S]*?)\s*<\/chat43-cognition>/i)
+    ?? trimmed.match(/```chat43-cognition\s*([\s\S]*?)```/i);
+  const fenced = wrapped
+    ? null
+    : trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  const candidate = (wrapped?.[1] ?? fenced?.[1] ?? trimmed).trim();
+
+  try {
+    const parsed = parseLooseCognitionEnvelopeJson(candidate);
+    if (!isPlainObject(parsed)) {
+      return undefined;
+    }
+    const directReply = readOptionalString(parsed.reply);
+    if (directReply !== undefined) {
+      return directReply;
+    }
+    const nestedEnvelope = isPlainObject(parsed.envelope) ? parsed.envelope : null;
+    return readOptionalString(nestedEnvelope?.reply);
+  } catch {
+    return extractMalformedQuotedStringField(candidate, "reply");
+  }
 }
 
 export function resolvePrimaryDispatchSessionKey(params: {
   baseSessionKey: string;
+  target: string;
   chatType: "direct" | "group";
-  eventType: Chat43AnySSEEvent["event_type"];
-  messageId: string;
+  runtime: LoadedSkillRuntime;
+  agentId?: string;
+  accountId?: string;
+  buildAgentSessionKey?: (params: {
+    agentId: string;
+    channel: string;
+    accountId?: string | null;
+    peer?: { kind?: string; id?: string } | null;
+    dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  }) => string;
 }): string {
-  void params.messageId;
-  if (params.chatType !== "direct") {
+  const sessionVersion = resolveSkillSessionVersion(params.runtime);
+  const kind = params.chatType === "group" ? "group" : "user";
+  const entityId = extractSessionEntityId(params.target, kind);
+  if (!entityId) {
     return params.baseSessionKey;
   }
 
-  if (params.eventType === "friend_request") {
-    return "agent:main:43chat-openclaw-plugin:friend-request";
+  const namespacedId = `${sessionVersion}:${entityId}`;
+  if (typeof params.buildAgentSessionKey === "function" && params.agentId) {
+    return params.buildAgentSessionKey({
+      agentId: params.agentId,
+      channel: CHANNEL_ID,
+      accountId: params.accountId,
+      peer: {
+        kind: params.chatType === "group" ? "group" : "direct",
+        id: namespacedId,
+      },
+      dmScope: params.chatType === "direct" ? "per-channel-peer" : undefined,
+    });
   }
 
-  if (params.eventType === "friend_accepted") {
-    return params.baseSessionKey.replace(":direct:", ":friend-accepted:");
-  }
-
-  return params.baseSessionKey;
+  return `${kind}:${namespacedId}`;
 }
 
 export function resolveDispatchSessionKey(baseSessionKey: string, messageId: string, attempt: number): string {
-  if (attempt <= 1) {
-    return baseSessionKey;
+  void messageId;
+  void attempt;
+  return baseSessionKey;
+}
+
+function extractSessionEntityId(target: string, expectedKind: "user" | "group"): string | undefined {
+  const trimmed = target.trim();
+  if (!trimmed.startsWith(`${expectedKind}:`)) {
+    return undefined;
   }
-  return `${baseSessionKey}:cognition-retry:${messageId}:attempt:${attempt}`;
+
+  const entityId = trimmed.slice(expectedKind.length + 1).trim();
+  return entityId || undefined;
 }
 
 function classifyNonSendableReplyText(text: string, noReplyToken: string): "no_reply" | "cognition_envelope" | null {
@@ -1525,6 +1960,9 @@ function classifyNonSendableReplyText(text: string, noReplyToken: string): "no_r
     /^<chat43-cognition>[\s\S]*<\/chat43-cognition>$/i.test(trimmed)
     || /^```chat43-cognition[\s\S]*```$/i.test(trimmed)
   ) {
+    return "cognition_envelope";
+  }
+  if (parseCognitionWriteEnvelope(trimmed) || looksLikeStructuredCognitionReply(trimmed)) {
     return "cognition_envelope";
   }
   return null;
@@ -1555,7 +1993,7 @@ export function classifyDispatchAttemptOutcome(params: {
   if (nonSendableReplyKind === "cognition_envelope") {
     return {
       kind: "suppressed",
-      reason: "model returned a raw cognition envelope instead of sendable reply text",
+      reason: "model returned raw cognition json instead of sendable reply text",
     };
   }
 
@@ -1603,12 +2041,51 @@ function inspectCognitionWriteRequirementsForEvent(params: {
   return [];
 }
 
-export function shouldRetryDispatchForEmptyOutcome(params: {
-  outcome: DispatchAttemptOutcome;
+export function looksLikeDispatchTimeoutError(error: unknown): boolean {
+  if (!error) {
+    return false;
+  }
+
+  const message = error instanceof Error
+    ? `${error.name} ${error.message}`
+    : String(error);
+  return /\btimeout\b|\btimed out\b|\babort(?:ed|error)?\b/iu.test(message);
+}
+
+export function shouldRetryDispatchAfterFailure(params: {
   attempt: number;
   maxAttempts: number;
+  error?: unknown;
+  replyDispatcherErrored?: boolean;
 }): boolean {
-  return params.outcome.kind === "empty" && params.attempt < params.maxAttempts;
+  if (params.attempt >= params.maxAttempts) {
+    return false;
+  }
+  return Boolean(params.error) || params.replyDispatcherErrored === true;
+}
+
+export function shouldRetryForMissingCognitionEnvelope(params: {
+  attempt: number;
+  maxAttempts: number;
+  requiresCognitionEnvelope: boolean;
+  cognitionEnvelope: CognitionWriteEnvelope | null;
+  finalReplyText?: string;
+  normalizedProtocol?: DispatchFinalNormalizationResult["normalizedProtocol"];
+}): boolean {
+  const hasReplyText = Boolean((params.finalReplyText ?? "").trim());
+  if (!params.requiresCognitionEnvelope) {
+    return false;
+  }
+  if (params.attempt >= params.maxAttempts) {
+    return false;
+  }
+  if (params.cognitionEnvelope === null) {
+    return !hasReplyText;
+  }
+  if (!hasReplyText) {
+    return true;
+  }
+  return false;
 }
 
 export function resolveRetryFallbackForMissingEnvelope(params: {
@@ -1616,20 +2093,23 @@ export function resolveRetryFallbackForMissingEnvelope(params: {
   retryFinalText: string;
   retryForEnvelope: boolean;
   firstAttemptOutcome: DispatchAttemptOutcome;
+  noReplyToken: string;
 }): {
   keepFirstOutwardReply: boolean;
   finalReplyText: string;
 } {
-  const retryFallbackReplyText = params.chatType === "group"
-    ? resolveGroupFinalReplyText(params.retryFinalText)
-    : params.retryFinalText.trim();
-  const keepFirstOutwardReply = params.retryForEnvelope && params.firstAttemptOutcome.kind === "reply";
+  const retryFallbackReplyText = extractReusableOutwardReplyText(params.retryFinalText);
+  const keepFirstOutwardReply = params.retryForEnvelope
+    && params.chatType === "direct"
+    && params.firstAttemptOutcome.kind === "reply";
 
   return {
     keepFirstOutwardReply,
     finalReplyText: keepFirstOutwardReply
       ? (params.firstAttemptOutcome as { kind: "reply"; replyText: string; reason: string }).replyText
-      : retryFallbackReplyText,
+      : (params.retryForEnvelope && params.chatType === "group"
+        ? (retryFallbackReplyText || params.noReplyToken)
+        : retryFallbackReplyText),
   };
 }
 
@@ -1771,9 +2251,29 @@ export function resolveGroupAttemptResolution(params: {
   missingSummaries: string[];
   blockedForCognition: boolean;
   blockedForModerationDecision?: boolean;
+  blockedForMissingEnvelope?: boolean;
   attempt: number;
   maxAttempts: number;
 }): GroupAttemptResolution {
+  if (params.blockedForMissingEnvelope) {
+    switch (params.outcome.kind) {
+      case "reply":
+        return {
+          action: "record",
+          decision: "reply_blocked_for_missing_envelope",
+          reason: "blocked final reply because required json envelope remained missing",
+        };
+      case "suppressed":
+      case "no_reply":
+      case "empty":
+        return {
+          action: "record",
+          decision: "no_reply_missing_envelope",
+          reason: "required json envelope remained missing",
+        };
+    }
+  }
+
   if (params.blockedForModerationDecision) {
     switch (params.outcome.kind) {
       case "reply":
@@ -1995,6 +2495,15 @@ export async function handle43ChatEvent(
   }
 
   const core = get43ChatRuntime();
+  const buildAgentSessionKey = (core.channel.routing as {
+    buildAgentSessionKey?: (params: {
+      agentId: string;
+      channel: string;
+      accountId?: string | null;
+      peer?: { kind?: string; id?: string } | null;
+      dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+    }) => string;
+  }).buildAgentSessionKey;
   const route = core.channel.routing.resolveAgentRoute({
     cfg,
     channel: CHANNEL_ID,
@@ -2012,16 +2521,27 @@ export async function handle43ChatEvent(
 
   const baseDispatchSessionKey = resolvePrimaryDispatchSessionKey({
     baseSessionKey: route.sessionKey,
+    target: inbound.target,
     chatType: inbound.chatType,
-    eventType: event.event_type,
-    messageId: inbound.messageId,
+    runtime: skillRuntime,
+    agentId: route.agentId,
+    accountId: route.accountId,
+    buildAgentSessionKey,
   });
+
+  if (route.sessionKey !== baseDispatchSessionKey || route.sessionKey === route.mainSessionKey) {
+    log(
+      `43chat[${accountId}]: session route target=${inbound.target} chat_type=${inbound.chatType} matched_by=${route.matchedBy} route_session=${route.sessionKey} main_session=${route.mainSessionKey} dispatch_session=${baseDispatchSessionKey}`,
+    );
+  }
 
   try {
     ensureSessionLogDir(baseDispatchSessionKey);
   } catch (cause) {
     error(`43chat[${accountId}]: failed to ensure session log dir for ${baseDispatchSessionKey}: ${String(cause)}`);
   }
+  let retryAttempted = false;
+  let retryReason = "";
 
   // 暂时不需要预览
   //const preview = inbound.text.replace(/\s+/g, " ").slice(0, 160);
@@ -2116,6 +2636,7 @@ export async function handle43ChatEvent(
     reason: string,
     replyText?: string,
     moderationDecision?: CognitionEnvelopeModerationDecision,
+    diagnostics?: SkillDecisionDiagnostics,
   ): void => {
     if (decisionRecorded) {
       return;
@@ -2127,6 +2648,7 @@ export async function handle43ChatEvent(
       decision,
       reason,
       replyText,
+      diagnostics,
       moderationDecision,
       log,
       error,
@@ -2161,6 +2683,8 @@ export async function handle43ChatEvent(
     let deliverSawFinal = false;
     let replyDispatcherErrored = false;
     let finalText = "";
+    let recoveredFromSessionLog = false;
+    let assistantTraceSummary = "";
 
     const { dispatcher, replyOptions, markDispatchIdle } = core.channel.reply.createReplyDispatcherWithTyping({
       deliver: async (reply: { text?: string; mediaUrl?: string; mediaUrls?: string[]; replyToCurrent?: boolean}, { kind }) => {
@@ -2242,13 +2766,19 @@ export async function handle43ChatEvent(
       }
     }
 
-    if (!finalText.trim()) {
-      const recoveredFinalText = recoverRecentFinalReplyFromSessionLog({
+    if (!finalText.trim() || replyDispatcherErrored) {
+      const assistantTrace = inspectRecentAssistantOutputFromSessionLog({
         sessionKey: attemptSessionKey,
         sinceTimestamp: attemptStartedAt,
       });
+      assistantTraceSummary = assistantTrace?.summary ?? "";
+      if (assistantTraceSummary) {
+        log(`43chat[${accountId}]: llm assistant trace ${assistantTraceSummary}`);
+      }
+      const recoveredFinalText = assistantTrace?.finalText ?? "";
       if (recoveredFinalText) {
         finalText = recoveredFinalText.trim();
+        recoveredFromSessionLog = true;
         log(`43chat[${accountId}]: recovered final reply from llm log ${truncateForLog(finalText, 160)}`);
       }
     }
@@ -2258,6 +2788,8 @@ export async function handle43ChatEvent(
       dispatchResult,
       deliverSawFinal,
       replyDispatcherErrored,
+      recoveredFromSessionLog,
+      assistantTraceSummary,
       finalText: finalText.trim(),
     };
   };
@@ -2275,20 +2807,104 @@ export async function handle43ChatEvent(
     );
     const attemptSessionKey = resolveDispatchSessionKey(baseDispatchSessionKey, inbound.messageId, mainAttempt);
     log(`43chat[${accountId}]: dispatch attempt=${mainAttempt}/${maxMainAttempts} message=${inbound.messageId} session=${attemptSessionKey}`);
-    const firstResult = await runDispatchAttempt(inbound, mainAttempt);
+    let result:
+      | Awaited<ReturnType<typeof runDispatchAttempt>>
+      | null = null;
+    let firstAttemptError: unknown;
 
-    let result = firstResult;
-    const firstParsedEnvelope = parseCognitionWriteEnvelope(firstResult.finalText);
+    try {
+      result = await runDispatchAttempt(inbound, mainAttempt);
+    } catch (err) {
+      firstAttemptError = err;
+    }
+
+    if (shouldRetryDispatchAfterFailure({
+      attempt: mainAttempt,
+      maxAttempts: maxMainAttempts,
+      error: firstAttemptError,
+      replyDispatcherErrored: result?.replyDispatcherErrored,
+    })) {
+      const retryAttempt = mainAttempt + 1;
+      const retryInbound = buildRetryAttemptInbound(inbound, retryAttempt);
+      retryReason = firstAttemptError
+        ? (looksLikeDispatchTimeoutError(firstAttemptError) ? "first attempt timed out" : "first attempt failed")
+        : "reply dispatcher reported an error";
+      retryAttempted = true;
+      log(`43chat[${accountId}]: dispatch attempt=${retryAttempt}/${maxMainAttempts} message=${retryInbound.messageId} session=${baseDispatchSessionKey} retry_reason=${retryReason}`);
+      result = await runDispatchAttempt(retryInbound, retryAttempt, {
+        sessionKeyOverride: baseDispatchSessionKey,
+      });
+    } else if (firstAttemptError) {
+      throw firstAttemptError;
+    }
+
+    if (!result) {
+      throw new Error(`43chat[${accountId}]: dispatch attempt settled without result`);
+    }
+
+    let currentAttempt = retryAttempted ? 2 : 1;
+    let normalizedFinal = normalizeDispatchFinalOutput({
+      rawFinalText: result.finalText,
+      noReplyToken: replyPolicy.noReplyToken,
+    });
+    if (normalizedFinal.normalizedProtocol !== "verbatim") {
+      log(`43chat[${accountId}]: normalized final output protocol=${normalizedFinal.normalizedProtocol}`);
+    }
+
+    if (shouldRetryForMissingCognitionEnvelope({
+      attempt: currentAttempt,
+      maxAttempts: maxMainAttempts,
+      requiresCognitionEnvelope,
+      cognitionEnvelope: normalizedFinal.cognitionEnvelope,
+      finalReplyText: normalizedFinal.finalReplyText,
+      normalizedProtocol: normalizedFinal.normalizedProtocol,
+    })) {
+      const retryAttempt = currentAttempt + 1;
+      const retryInbound = buildRetryAttemptInbound(buildInboundDescriptor(event, {
+        cfg,
+        accountId,
+        resolvedRoleNameOverride,
+        resolvedSenderRoleNameOverride,
+        extraPromptBlocks: [
+          ...buildEnvelopeRetryPromptBlocks({
+            missingSummaries: mainFlowMissingSummaries,
+            noReplyToken: replyPolicy.noReplyToken,
+            priorReplyText: result.finalText,
+            moderationDecisionRequired,
+            writesRequired: forceInlineCognitionEnvelopeForMainFlow || mainFlowMissingSummaries.length > 0,
+          }),
+          ...decisionBriefPromptBlocks,
+          ...initialPromptBlocks,
+        ],
+      }) ?? inbound, retryAttempt);
+      retryReason = "first attempt returned non-json output";
+      retryAttempted = true;
+      const retrySessionKey = resolveDispatchSessionKey(baseDispatchSessionKey, inbound.messageId, retryAttempt);
+      log(`43chat[${accountId}]: dispatch attempt=${retryAttempt}/${maxMainAttempts} message=${retryInbound.messageId} session=${retrySessionKey} retry_reason=${retryReason}`);
+      result = await runDispatchAttempt(retryInbound, retryAttempt);
+      currentAttempt = retryAttempt;
+      normalizedFinal = normalizeDispatchFinalOutput({
+        rawFinalText: result.finalText,
+        noReplyToken: replyPolicy.noReplyToken,
+      });
+      if (normalizedFinal.normalizedProtocol !== "verbatim") {
+        log(`43chat[${accountId}]: normalized final output protocol=${normalizedFinal.normalizedProtocol}`);
+      }
+      if (!normalizedFinal.cognitionEnvelope) {
+        log(`43chat[${accountId}]: required json envelope still missing after retry attempt=${retryAttempt}`);
+      } else {
+        log(`43chat[${accountId}]: recovered json envelope on retry attempt=${retryAttempt}`);
+      }
+    }
+
     let cognitionEnvelope = shouldParseCognitionEnvelopeForInbound({
       eventType: event.event_type,
       moderationDecisionRequired,
     })
-      ? firstParsedEnvelope
+      ? normalizedFinal.cognitionEnvelope
       : null;
     let finalReplyText = cognitionEnvelope?.replyText.trim()
-      ?? (inbound.chatType === "group"
-        ? resolveGroupFinalReplyText(firstResult.finalText)
-        : firstResult.finalText);
+      ?? normalizedFinal.finalReplyText;
     let moderationDecision = validateModerationDecision({
       cfg,
       eventType: event.event_type,
@@ -2305,114 +2921,34 @@ export async function handle43ChatEvent(
         log,
       });
     }
-    const firstAttemptOutcome = classifyDispatchAttemptOutcome({
-      finalReplyText,
-      suppressTextReply: inbound.suppressTextReply,
-      noReplyToken: replyPolicy.noReplyToken,
-      deliverSawFinal: firstResult.deliverSawFinal,
-      queuedFinal: firstResult.dispatchResult?.queuedFinal,
-      finalCount: firstResult.dispatchResult?.counts.final,
-    });
-    const retryForEnvelope = requiresCognitionEnvelope
-      && cognitionEnvelope === null
-      && mainAttempt < maxMainAttempts;
-    const retryForEmptyOutcome = shouldRetryDispatchForEmptyOutcome({
-      outcome: firstAttemptOutcome,
-      attempt: mainAttempt,
-      maxAttempts: maxMainAttempts,
-    });
-
-    if (
-      retryForEnvelope
-      || retryForEmptyOutcome
-    ) {
-      const retryAttempt = mainAttempt + 1;
-      const retryInbound = buildRetryAttemptInbound(buildInboundDescriptor(event, {
-        cfg,
-        accountId,
-        resolvedRoleNameOverride,
-        resolvedSenderRoleNameOverride,
-        extraPromptBlocks: [
-          ...(retryForEnvelope
-            ? buildEnvelopeRetryPromptBlocks({
-              missingSummaries: mainFlowMissingSummaries,
-              noReplyToken: replyPolicy.noReplyToken,
-              priorReplyText: firstResult.finalText,
-              moderationDecisionRequired,
-              writesRequired: forceInlineCognitionEnvelopeForMainFlow || mainFlowMissingSummaries.length > 0,
-            })
-            : buildEmptyReplyRetryPromptBlocks({
-              noReplyToken: replyPolicy.noReplyToken,
-              priorReplyText: firstResult.finalText,
-              requireCognitionEnvelope: requireEnvelopeForMainFlow,
-            })),
-          ...decisionBriefPromptBlocks,
-          ...initialPromptBlocks,
-        ],
-      }) ?? inbound, retryAttempt);
-      log(`43chat[${accountId}]: dispatch attempt=${retryAttempt}/${maxMainAttempts} message=${retryInbound.messageId} session=${baseDispatchSessionKey}`);
-      const retryResult = await runDispatchAttempt(retryInbound, retryAttempt, {
-        sessionKeyOverride: baseDispatchSessionKey,
-      });
-      const retryParsedEnvelope = parseCognitionWriteEnvelope(retryResult.finalText);
-      const retryEnvelope = shouldParseCognitionEnvelopeForInbound({
-        eventType: event.event_type,
-        moderationDecisionRequired,
-      })
-        ? retryParsedEnvelope
-        : null;
-      if (retryEnvelope) {
-        result = retryResult;
-        cognitionEnvelope = retryEnvelope;
-        finalReplyText = retryEnvelope.replyText.trim();
-        moderationDecision = validateModerationDecision({
-          cfg,
-          eventType: event.event_type,
-          decision: retryEnvelope.decision,
-          accountId,
-          log,
-        });
-        if (!moderationDecision) {
-          moderationDecision = resolveObserveFallbackModerationDecision({
-            cfg,
-            eventType: event.event_type,
-            decisionRequired: moderationDecisionRequired,
-            accountId,
-            log,
-          });
-        }
-        if (moderationDecisionRequired && !moderationDecision) {
-          log(`43chat[${accountId}]: cognition envelope recovered on retry attempt=${retryAttempt}, but structured moderation decision is still missing`);
-        } else {
-          log(`43chat[${accountId}]: cognition envelope recovered on retry attempt=${retryAttempt}`);
-        }
-      } else {
-        const retryFallback = resolveRetryFallbackForMissingEnvelope({
-          chatType: inbound.chatType,
-          retryFinalText: retryResult.finalText,
-          retryForEnvelope,
-          firstAttemptOutcome,
-        });
-        if (retryFallback.keepFirstOutwardReply) {
-          result = firstResult;
-          cognitionEnvelope = null;
-          finalReplyText = retryFallback.finalReplyText;
-          log(`43chat[${accountId}]: cognition envelope still missing after retry; keeping first outward reply to avoid blocking message`);
-        } else {
-          result = retryResult;
-          cognitionEnvelope = null;
-          finalReplyText = retryFallback.finalReplyText;
-          log(
-            retryForEnvelope
-              ? `43chat[${accountId}]: cognition envelope still missing after retry; falling back to latest outward reply`
-              : `43chat[${accountId}]: final reply still empty after retry; falling back to dispatch outcome classification`,
-          );
-        }
-      }
-    }
 
     if (result.replyDispatcherErrored) {
-      recordDecision("dispatch_error", "reply dispatcher completed after reply error");
+      const dispatchErrorReason = "reply dispatcher completed after reply error";
+      const diagnostics: SkillDecisionDiagnostics = {
+        rawFinalText: result.finalText,
+        resolvedReplyText: finalReplyText,
+        rawFinalKind: normalizedFinal.rawFinalKind,
+        normalizedProtocol: normalizedFinal.normalizedProtocol,
+        attemptOutcomeKind: "dispatch_error",
+        outwardOutcomeKind: "dispatch_error",
+        resolutionAction: "record",
+        retryAttempted,
+        retryReason,
+        dispatchError: dispatchErrorReason,
+        recoveredFromSessionLog: result.recoveredFromSessionLog,
+        deliverSawFinal: result.deliverSawFinal,
+        queuedFinal: result.dispatchResult?.queuedFinal,
+        finalCount: result.dispatchResult?.counts.final,
+        assistantTraceSummary: result.assistantTraceSummary,
+      };
+      log(`43chat[${accountId}]: final outcome ${summarizeFinalOutcomeForLog({
+        messageId: inbound.messageId,
+        decision: "dispatch_error",
+        reason: dispatchErrorReason,
+        diagnostics,
+        moderationDecisionKind: moderationDecision?.kind,
+      })}`);
+      recordDecision("dispatch_error", dispatchErrorReason, undefined, moderationDecision, diagnostics);
       return {
         messageId: inbound.messageId,
         senderId: inbound.senderId,
@@ -2429,6 +2965,8 @@ export async function handle43ChatEvent(
           cognitionEnvelope,
           finalReplyText,
           noReplyToken: replyPolicy.noReplyToken,
+          rawFinalKind: normalizedFinal.rawFinalKind,
+          normalizedProtocol: normalizedFinal.normalizedProtocol,
         })
       }`,
     );
@@ -2479,14 +3017,42 @@ export async function handle43ChatEvent(
     const resolution = resolveGroupAttemptResolution({
       outcome: outwardOutcome,
       missingSummaries: currentMissingSummaries,
+      blockedForMissingEnvelope: requiresCognitionEnvelope
+        && cognitionEnvelope === null
+        && !finalReplyText.trim(),
       blockedForCognition: forceInlineCognitionEnvelopeForMainFlow
         && cognitionEnforcement.enabled
         && cognitionEnforcement.block_final_reply_when_incomplete
         && currentMissingSummaries.length > 0,
-      blockedForModerationDecision: moderationDecisionRequired && !moderationDecision,
+      blockedForModerationDecision: moderationDecisionRequired
+        && !moderationDecision
+        && !finalReplyText.trim(),
       attempt: 1,
       maxAttempts: 1,
     });
+    const diagnostics: SkillDecisionDiagnostics = {
+      rawFinalText: result.finalText,
+      resolvedReplyText: finalReplyText,
+      rawFinalKind: normalizedFinal.rawFinalKind,
+      normalizedProtocol: normalizedFinal.normalizedProtocol,
+      attemptOutcomeKind: attemptOutcome.kind,
+      outwardOutcomeKind: outwardOutcome.kind,
+      resolutionAction: resolution.action,
+      retryAttempted,
+      retryReason,
+      recoveredFromSessionLog: result.recoveredFromSessionLog,
+      deliverSawFinal: result.deliverSawFinal,
+      queuedFinal: result.dispatchResult?.queuedFinal,
+      finalCount: result.dispatchResult?.counts.final,
+      assistantTraceSummary: result.assistantTraceSummary,
+    };
+    log(`43chat[${accountId}]: final outcome ${summarizeFinalOutcomeForLog({
+      messageId: inbound.messageId,
+      decision: resolution.action === "record" ? resolution.decision : "reply_sent",
+      reason: resolution.reason,
+      diagnostics,
+      moderationDecisionKind: moderationDecision?.kind,
+    })}`);
 
     if (resolution.action === "record") {
       if (resolution.decision === "reply_blocked_for_cognition") {
@@ -2504,7 +3070,7 @@ export async function handle43ChatEvent(
         log,
         error,
       });
-      recordDecision(resolution.decision, resolution.reason, undefined, moderationDecision);
+      recordDecision(resolution.decision, resolution.reason, undefined, moderationDecision, diagnostics);
     } else {
       await executeModerationAction({
         cfg,
@@ -2515,7 +3081,7 @@ export async function handle43ChatEvent(
         error,
       });
       await sendReply(resolution.replyText);
-      recordDecision("reply_sent", resolution.reason, resolution.replyText, moderationDecision);
+      recordDecision("reply_sent", resolution.reason, resolution.replyText, moderationDecision, diagnostics);
     }
 
     if (
@@ -2523,13 +3089,25 @@ export async function handle43ChatEvent(
       && currentMissingSummaries.length > 0
     ) {
       log(
-        `43chat[${accountId}]: cognition writes still missing after main decision envelope=${cognitionEnvelope ? "present" : "absent"} missing=${currentMissingSummaries.join(" | ")}`,
+        `43chat[${accountId}]: cognition writes still missing after main decision json=${cognitionEnvelope ? "present" : "absent"} missing=${currentMissingSummaries.join(" | ")}`,
       );
     }
 
   } catch (err) {
     error(`43chat[${accountId}]: failed to dispatch message: ${String(err)}`);
-    recordDecision("dispatch_error", String(err));
+    const diagnostics: SkillDecisionDiagnostics = {
+      resolutionAction: "record",
+      retryAttempted,
+      retryReason,
+      dispatchError: String(err),
+    };
+    log(`43chat[${accountId}]: final outcome ${summarizeFinalOutcomeForLog({
+      messageId: inbound.messageId,
+      decision: "dispatch_error",
+      reason: String(err),
+      diagnostics,
+    })}`);
+    recordDecision("dispatch_error", String(err), undefined, undefined, diagnostics);
   }
 
   return {

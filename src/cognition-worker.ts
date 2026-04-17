@@ -281,47 +281,101 @@ function extractAnthropicTextResponse(response: unknown): string {
     .trim();
 }
 
-async function requestBackgroundCognitionWrites(params: {
+function extractOpenAiCompletionTextResponse(response: unknown): string {
+  if (!isPlainObject(response) || !Array.isArray(response.choices)) {
+    return "";
+  }
+  return response.choices
+    .map((entry) => {
+      if (!isPlainObject(entry)) {
+        return "";
+      }
+      return readString(entry.text)
+        || (isPlainObject(entry.message) ? readString(entry.message.content) : "");
+    })
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function buildModelApiUrl(baseUrl: string, endpoint: "messages" | "completions"): string {
+  const normalizedBase = baseUrl.replace(/\/+$/, "");
+  if (normalizedBase.endsWith(`/${endpoint}`)) {
+    return normalizedBase;
+  }
+  if (normalizedBase.endsWith("/v1")) {
+    return `${normalizedBase}/${endpoint}`;
+  }
+  return `${normalizedBase}/v1/${endpoint}`;
+}
+
+export async function requestBackgroundCognitionWrites(params: {
   prompt: string;
   modelConfig: LocalModelConfig;
 }): Promise<string> {
-  if (params.modelConfig.api !== "anthropic-messages") {
-    throw new Error(`43chat cognition worker: unsupported model api ${params.modelConfig.api}`);
-  }
+  const abortController = new AbortController();
+  const abortTimer = setTimeout(() => abortController.abort(), 60_000);
+  try {
+    let response: Response;
+    if (params.modelConfig.api === "anthropic-messages") {
+      response = await fetch(buildModelApiUrl(params.modelConfig.baseUrl, "messages"), {
+        method: "POST",
+        signal: abortController.signal,
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": params.modelConfig.apiKey,
+          "anthropic-version": ANTHROPIC_VERSION,
+        },
+        body: JSON.stringify({
+          model: params.modelConfig.modelId,
+          max_tokens: Math.min(Math.max(params.modelConfig.maxTokens, 1024), 8_192),
+          messages: [{
+            role: "user",
+            content: [{
+              type: "text",
+              text: params.prompt,
+            }],
+          }],
+        }),
+      });
+    } else if (params.modelConfig.api === "openai-completions") {
+      response = await fetch(buildModelApiUrl(params.modelConfig.baseUrl, "completions"), {
+        method: "POST",
+        signal: abortController.signal,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${params.modelConfig.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: params.modelConfig.modelId,
+          prompt: params.prompt,
+          max_tokens: Math.min(Math.max(params.modelConfig.maxTokens, 1024), 8_192),
+          temperature: 0,
+          stream: false,
+        }),
+      });
+    } else {
+      throw new Error(`43chat cognition worker: unsupported model api ${params.modelConfig.api}`);
+    }
 
-  const response = await fetch(`${params.modelConfig.baseUrl.replace(/\/+$/, "")}/v1/messages`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": params.modelConfig.apiKey,
-      "anthropic-version": ANTHROPIC_VERSION,
-    },
-    body: JSON.stringify({
-      model: params.modelConfig.modelId,
-      max_tokens: Math.min(Math.max(params.modelConfig.maxTokens, 1024), 8_192),
-      messages: [{
-        role: "user",
-        content: [{
-          type: "text",
-          text: params.prompt,
-        }],
-      }],
-    }),
-  });
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(
+        `43chat cognition worker: model request failed (${response.status} ${response.statusText})${body ? `: ${body.slice(0, 400)}` : ""}`,
+      );
+    }
 
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(
-      `43chat cognition worker: model request failed (${response.status} ${response.statusText})${body ? `: ${body.slice(0, 400)}` : ""}`,
-    );
+    const json = await response.json().catch(() => null);
+    const text = params.modelConfig.api === "anthropic-messages"
+      ? extractAnthropicTextResponse(json)
+      : extractOpenAiCompletionTextResponse(json);
+    if (!text) {
+      throw new Error("43chat cognition worker: model returned empty text");
+    }
+    return text;
+  } finally {
+    clearTimeout(abortTimer);
   }
-
-  const json = await response.json().catch(() => null);
-  const text = extractAnthropicTextResponse(json);
-  if (!text) {
-    throw new Error("43chat cognition worker: model returned empty text");
-  }
-  return text;
 }
 
 function stripFences(text: string): string {
@@ -671,7 +725,6 @@ export function analyzeBackgroundCognitionWrites(text: string): BackgroundCognit
   const trimmed = stripInvalidJsonControlChars(stripFences(text));
   const rawCandidates = [
     trimmed,
-    trimmed.match(/<chat43-cognition>\s*([\s\S]*?)\s*<\/chat43-cognition>/i)?.[1] ?? "",
     (() => {
       const start = trimmed.indexOf("{");
       const end = trimmed.lastIndexOf("}");
@@ -875,6 +928,8 @@ function buildBackgroundRetryPrompt(params: {
     "- 如果当前批次已经出现稳定、可复用的群定位或人物信号，不要再返回 `{\"writes\":[]}`；至少输出能确定的那部分增量写入。",
     "- 即使暂时还不足以补完整个 `group_soul`，也应优先补当前发言者 `user_profile` 或 `group_members_graph` 中已经有证据的部分。",
     "- 仍然只允许输出纯 JSON，且顶层必须是 `{\"writes\":[...]}`。",
+    "- 最终输出必须能被标准 `JSON.parse` 成功解析；若发现少括号、少引号、尾部缺失或字段不闭合，先修正，再输出。",
+    "- 输出前先自检一次：确认首字符是 `{`、末字符是 `}`，并且整个文本可被 `JSON.parse` 成功解析。",
     "【当前仍待补的长期认知槽位】",
     missingLines,
     "",
@@ -1028,6 +1083,9 @@ export function buildGroupCognitionBatchPrompt(params: {
     "你必须只输出纯 JSON，不要输出 markdown、解释、前后缀、`<chat43-cognition>` 标签。",
     "输出格式固定为：{\"writes\":[{\"path\":\"...json\",\"content\":{...}}]}",
     "如果当前批次还不足以形成稳定、可复用的长期认知，就输出：{\"writes\":[]}",
+    "最终输出必须能被标准 `JSON.parse` 成功解析；若发现少括号、少引号、尾部缺失或字段不闭合，先修正，再输出。",
+    "输出前先自检一次：确认首字符是 `{`、末字符是 `}`，并且整个文本可被 `JSON.parse` 成功解析。",
+    "最终输出首字符必须是 `{`，末字符必须是 `}`；顶层只允许 `writes` 字段，不要输出 `reply`、`decision`、`envelope`、`_meta` 等额外字段。",
     "",
     "【硬性约束】",
     "- 只允许写入本轮允许的路径；不要写 group_state、decision_log、dialog_state，也不要写其它群或其它用户的文件。",
@@ -1252,6 +1310,9 @@ function buildPrivateCognitionBatchPrompt(params: {
     "你必须只输出纯 JSON，不要输出 markdown、解释、前后缀、`<chat43-cognition>` 标签。",
     "输出格式固定为：{\"writes\":[{\"path\":\"...json\",\"content\":{...}}]}",
     "如果当前批次还不足以形成稳定、可复用的长期认知，就输出：{\"writes\":[]}",
+    "最终输出必须能被标准 `JSON.parse` 成功解析；若发现少括号、少引号、尾部缺失或字段不闭合，先修正，再输出。",
+    "输出前先自检一次：确认首字符是 `{`、末字符是 `}`，并且整个文本可被 `JSON.parse` 成功解析。",
+    "最终输出首字符必须是 `{`，末字符必须是 `}`；顶层只允许 `writes` 字段，不要输出 `reply`、`decision`、`envelope`、`_meta` 等额外字段。",
     "",
     "【硬性约束】",
     "- 只允许写入本轮允许的路径；不要写 decision_log、任何群文件，也不要写其它用户的文件。",

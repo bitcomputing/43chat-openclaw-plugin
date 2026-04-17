@@ -6,6 +6,7 @@ import { map43ChatEventToInboundDescriptor } from "../bot.js";
 import { buildSkillEventContext } from "../skill-event-context.js";
 import {
   load43ChatSkillRuntime,
+  resolveSkillSessionVersion,
   shouldRequireStructuredModerationDecisionForRole,
   resolveSkillCognitionPolicy,
   resolveSkillModerationPolicy,
@@ -35,10 +36,14 @@ describe("43Chat skill runtime", () => {
     } as any);
 
     expect(runtime.source).toBe("builtin");
+    expect(runtime.data.session.version).toBe("v1");
+    expect(resolveSkillSessionVersion(runtime)).toBe("v1");
     expect(runtime.data.storage.group_soul).toBe("groups/{group_id}/soul.json");
     expect(runtime.data.event_profiles.private_message.prompt_blocks?.[0]?.title).toBe("私聊主流程协议");
-    expect(runtime.data.event_profiles.private_message.prompt_blocks?.[0]?.lines?.[0]).toContain("<chat43-cognition>");
-    expect(runtime.data.event_profiles.private_message.prompt_blocks?.[0]?.lines?.[1]).toContain("\"envelope\":{\"reply\":\"你好\"}");
+    expect(runtime.data.event_profiles.private_message.prompt_blocks?.[0]?.lines).toContainEqual(expect.stringContaining("最终输出改为两段"));
+    expect(runtime.data.event_profiles.private_message.prompt_blocks?.[0]?.lines).toContainEqual(expect.stringContaining("{\"decision\""));
+    expect(runtime.data.event_profiles.private_message.prompt_blocks?.[0]?.lines).toContainEqual(expect.stringContaining("在呢，你说。\\n"));
+    expect(runtime.data.event_profiles.group_message.prompt_blocks?.[0]?.lines).toContainEqual(expect.stringContaining("收到，今晚簋街见。\\n"));
   });
 
   it("uses runtime file overrides without changing plugin code", () => {
@@ -92,8 +97,47 @@ describe("43Chat skill runtime", () => {
     expect(descriptor?.suppressTextReply).toBe(true);
     expect(descriptor?.groupSystemPrompt).toContain("state-v2.json");
     expect(descriptor?.groupSystemPrompt).toContain(runtimePath);
-    expect(descriptor?.groupSystemPrompt).toContain("<think> 至少包含: 群Soul / 决策");
+    expect(descriptor?.groupSystemPrompt).toContain("内部推理至少覆盖: 群Soul / 决策");
     expect(descriptor?.groupSystemPrompt).toContain("当前消息处理约束");
+  });
+
+  it("normalizes session version from skill runtime and falls back to v1 when empty", () => {
+    const dir = mkdtempSync(join(tmpdir(), "43chat-skill-runtime-"));
+    tempDirs.push(dir);
+    const runtimePath = join(dir, "skill.runtime.json");
+    writeFileSync(runtimePath, JSON.stringify({
+      session: {
+        version: " V2 beta ",
+      },
+    }), "utf8");
+
+    const runtime = load43ChatSkillRuntime({
+      channels: {
+        "43chat-openclaw-plugin": {
+          skillDocsDir: dir,
+          skillRuntimePath: runtimePath,
+        },
+      },
+    } as any);
+
+    expect(resolveSkillSessionVersion(runtime)).toBe("V2-beta");
+
+    writeFileSync(runtimePath, JSON.stringify({
+      session: {
+        version: "   ",
+      },
+    }), "utf8");
+
+    const fallbackRuntime = load43ChatSkillRuntime({
+      channels: {
+        "43chat-openclaw-plugin": {
+          skillDocsDir: dir,
+          skillRuntimePath: runtimePath,
+        },
+      },
+    } as any);
+
+    expect(resolveSkillSessionVersion(fallbackRuntime)).toBe("v1");
   });
 
   it("allows reply delivery strategy to be overridden by skill runtime", () => {
@@ -298,7 +342,7 @@ describe("43Chat skill runtime", () => {
         group_members_graph_required_after_interactions: 1,
         retry_prompt_lines: [
           "上一轮最终输出已被插件拦截，因为文档要求的认知槽位仍为空。",
-          "本轮必须先用当前会话里实际可见的文件工具，把缺失认知写回对应 JSON 文件，再决定回复或输出 `{no_reply_token}`。",
+          "本轮必须先用当前会话里实际可见的文件工具，把缺失认知写回对应 JSON 文件，再决定回复；若不回复，也要在最终 JSON 的 `reply` 中写 `{no_reply_token}`。",
           "不要只重复上一轮的文字回复；先补齐 JSON，再给最终结论。",
         ],
       },
@@ -327,7 +371,7 @@ describe("43Chat skill runtime", () => {
     expect(context.prompt).toContain("topic_persistence.group_soul = filtered");
     expect(context.prompt).toContain("群聊长期认知默认改由后台 cognition worker 异步维护");
     expect(context.prompt).toContain("当前是管理员结构化管理回合");
-    expect(context.prompt).toContain("群聊主流程最终输出统一使用 `<chat43-cognition>{...}</chat43-cognition>`");
+    expect(context.prompt).toContain("群聊主流程最终输出改为两段");
     expect(context.prompt).toContain("当前主流程可以参考已有认知文件做判断，但不要承担 `group_soul` / `user_profile` / `group_members_graph` 的补写任务");
     expect(context.prompt).toContain("【这些长期认知文件由后台 worker 异步补写】");
     expect(context.prompt).not.toContain("【本轮需要你显式维护的长期认知文件】");
@@ -579,8 +623,8 @@ describe("43Chat skill runtime", () => {
     expect(context.prompt).toContain("off_topic.repeat_occurrence => warn / public_reply=false");
     expect(context.prompt).toContain("重复偏题时不公开陪聊");
     expect(context.prompt).toContain("本轮结构化 `decision` 为必填");
-    expect(context.prompt).toContain("最终输出必须是一个 `<chat43-cognition>{...}</chat43-cognition>` envelope");
-    expect(context.prompt).toContain("`writes` 可以为空数组 `[]`");
+    expect(context.prompt).toContain("最终输出改为“正文/NO_REPLY + 最后一个 decision JSON”");
+    expect(context.prompt).toContain("这里最后那个 JSON 只负责 `decision`");
     expect(context.prompt).toContain("你只需输出合法 `decision`，插件会按 `decision.kind` 执行对应管理动作");
     expect(context.prompt).toContain("不要输出“我没有这个工具”");
     expect(context.prompt).not.toContain("当前群聊主流程统一只输出普通文本或 `NO_REPLY`");

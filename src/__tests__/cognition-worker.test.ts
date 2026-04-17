@@ -1,11 +1,12 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   analyzeBackgroundCognitionWrites,
   buildGroupCognitionBatchPrompt,
   parseBackgroundCognitionWrites,
+  requestBackgroundCognitionWrites,
   resolveLocalModelConfig,
 } from "../cognition-worker.js";
 
@@ -16,6 +17,8 @@ describe("43Chat cognition worker", () => {
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
     }
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("resolves local model config from openclaw models/auth files", () => {
@@ -74,7 +77,7 @@ describe("43Chat cognition worker", () => {
       },
     ]);
 
-    expect(parseBackgroundCognitionWrites("<chat43-cognition>{\"writes\":[{\"path\":\"profiles/12443.json\",\"content\":{\"tags\":[\"产品\"]}}],\"reply\":\"NO_REPLY\"}</chat43-cognition>")).toEqual([
+    expect(parseBackgroundCognitionWrites("{\"writes\":[{\"path\":\"profiles/12443.json\",\"content\":{\"tags\":[\"产品\"]}}],\"reply\":\"NO_REPLY\"}")).toEqual([
       {
         path: "profiles/12443.json",
         content: { tags: ["产品"] },
@@ -140,6 +143,97 @@ describe("43Chat cognition worker", () => {
         },
       },
     ]);
+  });
+
+  it("resolves openai-completions model config from openclaw models/auth files", () => {
+    const dir = mkdtempSync(join(tmpdir(), "43chat-cognition-worker-"));
+    tempDirs.push(dir);
+    mkdirSync(join(dir, "agents/main/agent"), { recursive: true });
+    writeFileSync(join(dir, "openclaw.json"), JSON.stringify({
+      agents: {
+        defaults: {
+          model: {
+            primary: "nvidia/deepseek-ai/deepseek-v3.1-terminus",
+          },
+        },
+      },
+    }), "utf8");
+    writeFileSync(join(dir, "agents/main/agent/models.json"), JSON.stringify({
+      providers: {
+        nvidia: {
+          baseUrl: "https://integrate.api.nvidia.com/v1",
+          api: "openai-completions",
+          models: [{
+            id: "deepseek-ai/deepseek-v3.1-terminus",
+            maxTokens: 16384,
+          }],
+        },
+      },
+    }), "utf8");
+    writeFileSync(join(dir, "agents/main/agent/auth-profiles.json"), JSON.stringify({
+      profiles: {
+        "nvidia:default": {
+          type: "api_key",
+          provider: "nvidia",
+          key: "nvapi-test",
+        },
+      },
+      lastGood: {
+        nvidia: "nvidia:default",
+      },
+    }), "utf8");
+
+    expect(resolveLocalModelConfig({ openclawHome: dir })).toMatchObject({
+      providerId: "nvidia",
+      modelId: "deepseek-ai/deepseek-v3.1-terminus",
+      baseUrl: "https://integrate.api.nvidia.com/v1",
+      api: "openai-completions",
+      apiKey: "nvapi-test",
+      maxTokens: 16384,
+    });
+  });
+
+  it("requests background cognition writes via openai-completions api", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{
+        text: "{\"writes\":[]}",
+      }],
+    }), {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+      },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await requestBackgroundCognitionWrites({
+      prompt: "Return compact JSON only",
+      modelConfig: {
+        providerId: "nvidia",
+        modelId: "deepseek-ai/deepseek-v3.1-terminus",
+        baseUrl: "https://integrate.api.nvidia.com/v1",
+        api: "openai-completions",
+        apiKey: "nvapi-test",
+        maxTokens: 16384,
+      },
+    });
+
+    expect(response).toBe("{\"writes\":[]}");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://integrate.api.nvidia.com/v1/completions");
+    expect(init.method).toBe("POST");
+    expect(init.headers).toMatchObject({
+      "Content-Type": "application/json",
+      Authorization: "Bearer nvapi-test",
+    });
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      model: "deepseek-ai/deepseek-v3.1-terminus",
+      prompt: "Return compact JSON only",
+      max_tokens: 8192,
+      temperature: 0,
+      stream: false,
+    });
   });
 
   it("classifies explicit empty and invalid background cognition payloads", () => {

@@ -1,5 +1,8 @@
 {
   "version": "4.1.0",
+  "session": {
+    "version": "v1"
+  },
   "docs": {
     "skill": "SKILL.md",
     "cognition": "COGNITION.md",
@@ -64,7 +67,7 @@
       "group_members_graph_required_after_interactions": 3,
       "retry_prompt_lines": [
         "上一轮最终输出已被插件拦截，因为文档要求的认知槽位仍为空。",
-        "本轮必须先用当前会话里实际可见的文件工具，把缺失认知写回对应 JSON 文件，再决定回复或输出 `{no_reply_token}`。",
+        "本轮必须先用当前会话里实际可见的文件工具，把缺失认知写回对应 JSON 文件，再决定回复；若不回复，也要在最终 JSON 的 `reply` 中写 `{no_reply_token}`。",
         "不要只重复上一轮的文字回复；先补齐 JSON，再给最终结论。"
       ]
     }
@@ -126,7 +129,7 @@
         "summary": "普通群成员，以参与讨论为主，不主动承担管理动作。",
         "responsibilities": ["围绕群 Soul 参与有价值的话题", "被明确@到或被明确提问时及时回应", "不打断已经自然完成的成员对话"],
         "permissions": ["普通文本回复", "读取并参考群认知"],
-        "decision_rules": ["普通闲聊且未明确需要你参与时，可输出 {no_reply_token}"]
+        "decision_rules": ["普通闲聊且未明确需要你参与时，返回合法 JSON，并把 `reply` 写成 {no_reply_token}"]
       },
       "管理员": {
         "summary": "管理员的首要职责是维护健康的群组秩序，而不只是参与聊天。",
@@ -225,11 +228,19 @@
         {
           "title": "私聊主流程协议",
           "lines": [
-            "私聊主流程最终输出统一使用 `<chat43-cognition>{...}</chat43-cognition>`；不要输出裸文本、不要只输出 `<final>...</final>`、不要输出裸 `NO_REPLY`",
-            "唯一合法示例：`<chat43-cognition>{\"envelope\":{\"reply\":\"你好\"},\"writes\":[]}</chat43-cognition>`；`<chat43-cognition>` 标签里面只能放合法 JSON",
-            "真正对外发送的文本写进 envelope.reply；若当前消息不需要回复，就把 envelope.reply 写成 `{no_reply_token}`",
+            "私聊主流程最终输出改为两段：先输出真正要发给对方的正文文本，最后再输出一个只包含 `decision` 的纯 JSON 对象；不要把正文包进 JSON",
+            "最稳妥模板：`<公开回复或{no_reply_token}>\\n{\"decision\":{\"kind\":\"observe\",\"reason\":\"<简短原因>\"}}`",
+            "如果当前消息不需要回复，正文就直接写 `{no_reply_token}`；不要再输出 `reply` 字段",
+            "回复示例：`在呢，你说。\\n{\"decision\":{\"kind\":\"observe\",\"reason\":\"直接回应当前私聊消息\"}}`",
+            "不回复示例：`{no_reply_token}\\n{\"decision\":{\"kind\":\"no_reply\",\"reason\":\"当前私聊无需继续回复\"}}`",
+            "失败示例：只输出纯 JSON、`好的 {\"decision\":...}`、markdown 代码块 JSON、`{\"envelope\":{...}}` 都算协议错误",
+            "先完成判断，再一次性输出：前面是正文，最后一个非空块必须是 JSON；不要先写解释、再写多段补充、再写 JSON",
+            "最后那个 JSON 必须能被标准 `JSON.parse` 成功解析；若发现少括号、少引号、尾部缺失或字段不闭合，先修正，再输出",
+            "输出前先自检一次：确认最后一个非空块首字符是 `{`、末字符是 `}`，并且整个 JSON 可被 `JSON.parse` 成功解析",
+            "最后那个 JSON 顶层只允许使用 `decision`；不要输出 `reply`、`writes`、`envelope`、`moderation`、`parameter`、`_meta`、`chat43_mentions` 等额外字段",
+            "如果需要 `decision`，`decision.kind` 只能是 `observe` / `no_reply` / `redirect` / `warn` / `mark_risk` / `remove_member`；不要自造 `reply`、`reply_sent`、`duplicate` 等值",
             "不要输出 `<thinking>`、`<envelope>`、`<reply>`、`<writes>` 这类 XML 标签",
-            "`writes` 默认写空数组 `[]`；不要输出“我没有这个工具”“插件会处理”“this is a retry”之类说明文本"
+            "不要输出“我没有这个工具”“插件会处理”“this is a retry”之类说明文本"
           ]
         }
       ]
@@ -248,7 +259,14 @@
             "默认先处理本事件这一条新消息，避免无边界扩写上一轮话题",
             "只有当前消息明确在追问、承接或引用上一轮内容时，才能继续上文",
             "群里多人并发发言时，只围绕当前发言者当前这条消息作答",
-            "如果当前消息只是普通成员之间已自然完成的对话、且没有管理必要，可输出 `{no_reply_token}`"
+            "如果当前消息只是普通成员之间已自然完成的对话、且没有管理必要，正文直接写 `{no_reply_token}`，最后仍补一个 `decision` JSON",
+            "最稳妥模板：`<公开回复或{no_reply_token}>\\n{\"decision\":{\"kind\":\"observe\",\"reason\":\"<简短原因>\"}}`",
+            "回复示例：`收到，今晚簋街见。\\n{\"decision\":{\"kind\":\"observe\",\"reason\":\"当前消息明确需要我回应\"}}`",
+            "不回复示例：`{no_reply_token}\\n{\"decision\":{\"kind\":\"no_reply\",\"reason\":\"群成员之间已自然完成对话，无需我接入\"}}`",
+            "失败示例：只输出纯 JSON、`好的 {\"decision\":...}`、markdown 代码块 JSON、`{\"envelope\":{...}}` 都算协议错误",
+            "先完成判断，再一次性输出：前面是正文，最后一个非空块必须是 JSON；不要先写自然语言解释、再追加多段内容、再补 JSON",
+            "最后那个 JSON 必须能被标准 `JSON.parse` 成功解析；若发现少括号、少引号、尾部缺失或字段不闭合，先修正，再输出",
+            "输出前先自检一次：确认最后一个非空块首字符是 `{`、末字符是 `}`，并且整个 JSON 可被 `JSON.parse` 成功解析"
           ]
         },
         {
@@ -264,9 +282,17 @@
           "title": "认知写入执行要求",
           "lines": [
             "群聊长期认知默认由后台 cognition worker 异步维护；worker 会读取本地 models/auth 配置并批量补写 `group_soul` / `user_profile` / `group_members_graph`",
-            "群聊主流程最终输出统一使用 `<chat43-cognition>{...}</chat43-cognition>`；不要输出裸文本、不要只输出 `<final>...</final>`、不要输出裸 `NO_REPLY`",
-            "真正对外发送的文本写进 envelope.reply；若当前消息不需要公开回复，就把 envelope.reply 写成 `{no_reply_token}`",
-            "`writes` 默认写空数组 `[]`；群聊长期认知继续由后台 worker 异步补写，不要在主流程里承担 `group_soul` / `user_profile` / `group_members_graph` 的补写任务",
+            "群聊主流程最终输出改为两段：先输出正文或 `NO_REPLY`，最后再输出一个只包含 `decision` 的纯 JSON；不要再输出 `reply` / `writes`",
+            "最稳妥模板：`<公开回复或{no_reply_token}>\\n{\"decision\":{\"kind\":\"observe\",\"reason\":\"<简短原因>\"}}`",
+            "真正对外发送的文本直接写在正文里；若当前消息不需要公开回复，正文就写成 `{no_reply_token}`",
+            "回复示例：`收到，今晚簋街见。\\n{\"decision\":{\"kind\":\"observe\",\"reason\":\"当前消息明确需要我回应\"}}`",
+            "不回复示例：`{no_reply_token}\\n{\"decision\":{\"kind\":\"no_reply\",\"reason\":\"群成员之间已自然完成对话，无需我接入\"}}`",
+            "失败示例：只输出纯 JSON、`好的 {\"decision\":...}`、markdown 代码块 JSON、`{\"envelope\":{...}}` 都算协议错误",
+            "先完成判断，再一次性输出：前面是正文，最后一个非空块必须是 JSON；不要先写一句自然语言，再补第二段 JSON",
+            "最后那个 JSON 必须能被标准 `JSON.parse` 成功解析；若发现少括号、少引号、尾部缺失或字段不闭合，先修正，再输出",
+            "输出前先自检一次：确认最后一个非空块首字符是 `{`、末字符是 `}`，并且整个 JSON 可被 `JSON.parse` 成功解析",
+            "最后那个 JSON 顶层只允许 `decision`；不要输出 `reply`、`writes`、`envelope`、`moderation`、`parameter`、`_meta`、`chat43_mentions` 等额外字段",
+            "`decision.kind` 只能是 `observe` / `no_reply` / `redirect` / `warn` / `mark_risk` / `remove_member`",
             "群聊主流程不要调用 `edit` / `write` 直接改写 `group_soul` / `user_profile` / `group_members_graph`；新增观察交给后台 worker 归并落库",
             "当前主流程可以参考已有认知文件做判断，但长期沉淀由后台 batch 负责写回文档",
             "本轮观察与管理决策仍由插件写入 `group_decision_log`，供后续主流程和 worker 共同参考"
@@ -280,7 +306,7 @@
             "如果命中 `moderation_policy` 里的场景，按 runtime 声明的 `scenario + stage + decision.kind` 执行，不要自创管理梯度",
             "垃圾广告、营销导流、骚扰、人身攻击、反复刷屏，属于需要你参与判断的管理事件，即使当前消息没有@你",
             "允许结合 `group_state`、`group_members_graph`、`user_profile` 中的最近记录判断是否警告、移除成员、或仅记录观察",
-            "如果最终判断是管理动作优先，可以不公开回复，但仍需返回合法 envelope，并让插件完成决策记录"
+            "如果最终判断是管理动作优先，可以不公开回复，但仍需按“正文/NO_REPLY + decision JSON”协议输出，并让插件完成决策记录"
           ]
         },
         {

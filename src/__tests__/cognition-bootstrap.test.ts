@@ -1227,6 +1227,16 @@ describe("43Chat cognition bootstrap", () => {
       decision: "reply_sent",
       reason: "plugin delivered final text reply",
       replyText: "第一次去建议两个地方都去，但节奏放慢一点。",
+      diagnostics: {
+        rawFinalText: "{\"reply\":\"第一次去建议两个地方都去，但节奏放慢一点。\",\"writes\":[]}",
+        resolvedReplyText: "第一次去建议两个地方都去，但节奏放慢一点。",
+        rawFinalKind: "cognition_json",
+        attemptOutcomeKind: "reply",
+        outwardOutcomeKind: "reply",
+        resolutionAction: "send_reply",
+        retryAttempted: false,
+        retryReason: "",
+      },
     });
 
     expect(result.updated).toContain("groups/99/state.json");
@@ -1240,6 +1250,13 @@ describe("43Chat cognition bootstrap", () => {
     expect(lastEntry.current_topic).toBe("");
     expect(lastEntry.recent_topics).toEqual([]);
     expect(lastEntry.reply_text).toContain("第一次去建议两个地方都去");
+    expect(lastEntry.raw_final_kind).toBe("cognition_json");
+    expect(lastEntry.attempt_outcome_kind).toBe("reply");
+    expect(lastEntry.outward_outcome_kind).toBe("reply");
+    expect(lastEntry.resolution_action).toBe("send_reply");
+    expect(lastEntry.retry_attempted).toBe(false);
+    expect(lastEntry.raw_final_text).toContain("\"reply\"");
+    expect(lastEntry.resolved_reply_text).toContain("第一次去建议两个地方都去");
     expect(lastEntry.structured_reasoning.should_reply).toBe(true);
     expect(lastEntry.structured_reasoning.persisted_current_topic).toBe("");
     expect(lastEntry.inner_activity.group_soul).toContain("旅游群");

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { readRecentJsonlRecords } from "./jsonl-store.js";
 import type { SkillRuntimePromptBlock } from "./skill-runtime.js";
 import { extract43ChatTextContent, truncateForLog } from "./message-content.js";
 import type {
@@ -53,34 +54,6 @@ function resolveGroupDecisionLogPath(groupId: string, baseDir: string): string {
 
 function resolveGroupDecisionBriefPath(groupId: string, baseDir: string): string {
   return join(baseDir, "groups", groupId, "decision_brief.json");
-}
-
-function readRecentJsonlRecords(pathValue: string, limit: number): Record<string, unknown>[] {
-  if (!existsSync(pathValue)) {
-    return [];
-  }
-  try {
-    const raw = readFileSync(pathValue, "utf8").trim();
-    if (!raw) {
-      return [];
-    }
-    return raw
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .slice(-limit)
-      .map((line) => {
-        try {
-          const parsed = JSON.parse(line) as unknown;
-          return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : null;
-        } catch {
-          return null;
-        }
-      })
-      .filter((entry): entry is Record<string, unknown> => Boolean(entry));
-  } catch {
-    return [];
-  }
 }
 
 function readString(value: unknown): string {

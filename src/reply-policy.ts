@@ -1,7 +1,8 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, normalize } from "node:path";
 import type { ClawdbotConfig } from "openclaw/plugin-sdk";
+import { readRecentJsonlRecords } from "./jsonl-store.js";
 import { extract43ChatTextContent, looksQuestionLike } from "./message-content.js";
 import {
   load43ChatSkillRuntime,
@@ -52,18 +53,8 @@ function loadRecentReplyCount(params: {
   }
 
   try {
-    const lines = readFileSync(fullPath, "utf8")
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
-    const recentLines = lines.slice(-params.recentDecisionWindow);
-    return recentLines.reduce((count, line) => {
-      try {
-        const entry = JSON.parse(line) as Record<string, unknown>;
-        return entry.decision === "reply_sent" ? count + 1 : count;
-      } catch {
-        return count;
-      }
+    return readRecentJsonlRecords(fullPath, params.recentDecisionWindow).reduce((count, entry) => {
+      return entry.decision === "reply_sent" ? count + 1 : count;
     }, 0);
   } catch {
     return 0;

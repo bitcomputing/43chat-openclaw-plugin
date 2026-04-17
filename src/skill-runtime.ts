@@ -7,6 +7,9 @@ import packageJson from "../package.json" with { type: "json" };
 export type SkillRuntimeReplyMode = "normal" | "suppress_text_reply";
 export type SkillRuntimeChatType = "direct" | "group";
 export type SkillRuntimeChunkMode = "length" | "newline" | "raw";
+export type SkillRuntimeSessionConfig = {
+  version?: string;
+};
 export type SkillRuntimeReplyDelivery = {
   chunk_mode?: SkillRuntimeChunkMode;
   text_chunk_limit?: number;
@@ -163,6 +166,7 @@ export type SkillRuntimeEventProfile = {
 
 export type SkillRuntime = {
   version: string;
+  session: SkillRuntimeSessionConfig;
   docs: Record<string, string>;
   storage: Record<string, string>;
   reply_delivery_defaults: SkillRuntimeReplyDelivery;
@@ -188,6 +192,9 @@ const DEFAULT_SKILL_DOCS_DIR = join(homedir(), ".openclaw", "skills", "43chat");
 
 export const DEFAULT_SKILL_RUNTIME: SkillRuntime = {
   version: "4.1.0",
+  session: {
+    version: "v1",
+  },
   docs: {
     skill: "SKILL.md",
     cognition: "COGNITION.md",
@@ -268,7 +275,7 @@ export const DEFAULT_SKILL_RUNTIME: SkillRuntime = {
       group_members_graph_required_after_interactions: 1,
       retry_prompt_lines: [
         "上一轮最终输出已被插件拦截，因为文档要求的认知槽位仍为空。",
-        "本轮必须先用当前会话里实际可见的文件工具，把缺失认知写回对应 JSON 文件，再决定回复或输出 `{no_reply_token}`。",
+        "本轮必须先用当前会话里实际可见的文件工具，把缺失认知写回对应 JSON 文件，再决定回复；若不回复，也要在最终 JSON 的 `reply` 中写 `{no_reply_token}`。",
         "不要只重复上一轮的文字回复；先补齐 JSON，再给最终结论。",
       ],
     },
@@ -359,7 +366,7 @@ export const DEFAULT_SKILL_RUNTIME: SkillRuntime = {
           "读取并参考群认知",
         ],
         decision_rules: [
-          "普通闲聊且未明确需要你参与时，可输出 {no_reply_token}",
+          "普通闲聊且未明确需要你参与时，返回合法 JSON，并把 `reply` 写成 {no_reply_token}",
         ],
       },
       管理员: {
@@ -485,11 +492,19 @@ export const DEFAULT_SKILL_RUNTIME: SkillRuntime = {
         {
           title: "私聊主流程协议",
           lines: [
-            "私聊主流程最终输出统一使用 `<chat43-cognition>{...}</chat43-cognition>`；不要输出裸文本、不要只输出 `<final>...</final>`、不要输出裸 `NO_REPLY`",
-            "唯一合法示例：`<chat43-cognition>{\"envelope\":{\"reply\":\"你好\"},\"writes\":[]}</chat43-cognition>`；`<chat43-cognition>` 标签里面只能放合法 JSON",
-            "真正对外发送的文本写进 envelope.reply；若当前消息不需要回复，就把 envelope.reply 写成 `{no_reply_token}`",
+            "私聊主流程最终输出改为两段：先输出真正要发给对方的正文文本，最后再输出一个只包含 `decision` 的纯 JSON 对象；不要把正文包进 JSON",
+            "最稳妥模板：`<公开回复或{no_reply_token}>\\n{\"decision\":{\"kind\":\"observe\",\"reason\":\"<简短原因>\"}}`",
+            "如果当前消息不需要回复，正文就直接写 `{no_reply_token}`；不要再输出 `reply` 字段",
+            "回复示例：`在呢，你说。\\n{\"decision\":{\"kind\":\"observe\",\"reason\":\"直接回应当前私聊消息\"}}`",
+            "不回复示例：`{no_reply_token}\\n{\"decision\":{\"kind\":\"no_reply\",\"reason\":\"当前私聊无需继续回复\"}}`",
+            "失败示例：只输出纯 JSON、`好的 {\"decision\":...}`、markdown 代码块 JSON、`{\"envelope\":{...}}` 都算协议错误",
+            "先完成判断，再一次性输出：前面是正文，最后一个非空块必须是 JSON；不要先写解释、再写多段补充、再写 JSON",
+            "最后那个 JSON 必须能被标准 `JSON.parse` 成功解析；若发现少括号、少引号、尾部缺失或字段不闭合，先修正，再输出",
+            "输出前先自检一次：确认最后一个非空块首字符是 `{`、末字符是 `}`，并且整个 JSON 可被 `JSON.parse` 成功解析",
+            "最后那个 JSON 顶层只允许使用 `decision`；不要输出 `reply`、`writes`、`envelope`、`moderation`、`parameter`、`_meta`、`chat43_mentions` 等额外字段",
+            "如果需要 `decision`，`decision.kind` 只能是 `observe` / `no_reply` / `redirect` / `warn` / `mark_risk` / `remove_member`；不要自造 `reply`、`reply_sent`、`duplicate` 等值",
             "不要输出 `<thinking>`、`<envelope>`、`<reply>`、`<writes>` 这类 XML 标签",
-            "`writes` 默认写空数组 `[]`；不要输出“我没有这个工具”“插件会处理”“this is a retry”之类说明文本",
+            "不要输出“我没有这个工具”“插件会处理”“this is a retry”之类说明文本",
           ],
         },
       ],
@@ -508,7 +523,14 @@ export const DEFAULT_SKILL_RUNTIME: SkillRuntime = {
             "默认先处理本事件这一条新消息，避免无边界扩写上一轮话题",
             "只有当前消息明确在追问、承接或引用上一轮内容时，才能继续上文",
             "群里多人并发发言时，只围绕当前发言者当前这条消息作答",
-            "如果当前消息只是普通成员之间已自然完成的对话、且没有管理必要，可输出 `{no_reply_token}`",
+            "如果当前消息只是普通成员之间已自然完成的对话、且没有管理必要，正文直接写 `{no_reply_token}`，最后仍补一个 `decision` JSON",
+            "最稳妥模板：`<公开回复或{no_reply_token}>\\n{\"decision\":{\"kind\":\"observe\",\"reason\":\"<简短原因>\"}}`",
+            "回复示例：`收到，今晚簋街见。\\n{\"decision\":{\"kind\":\"observe\",\"reason\":\"当前消息明确需要我回应\"}}`",
+            "不回复示例：`{no_reply_token}\\n{\"decision\":{\"kind\":\"no_reply\",\"reason\":\"群成员之间已自然完成对话，无需我接入\"}}`",
+            "失败示例：只输出纯 JSON、`好的 {\"decision\":...}`、markdown 代码块 JSON、`{\"envelope\":{...}}` 都算协议错误",
+            "先完成判断，再一次性输出：前面是正文，最后一个非空块必须是 JSON；不要先写自然语言解释、再追加多段内容、再补 JSON",
+            "最后那个 JSON 必须能被标准 `JSON.parse` 成功解析；若发现少括号、少引号、尾部缺失或字段不闭合，先修正，再输出",
+            "输出前先自检一次：确认最后一个非空块首字符是 `{`、末字符是 `}`，并且整个 JSON 可被 `JSON.parse` 成功解析",
           ],
         },
         {
@@ -525,7 +547,7 @@ export const DEFAULT_SKILL_RUNTIME: SkillRuntime = {
           roles: ["管理员", "群主"],
           lines: [
             "当你的身份是 {effective_role} 时，维护群组秩序优先于普通闲聊沉默规则",
-            "当当前消息明显背离 `group_soul.boundaries` 时，优先选择 `NO_REPLY`、轻提醒或把话题拉回群定位，不要陪同扩聊",
+            "当当前消息明显背离 `group_soul.boundaries` 时，优先选择把 `reply` 写成 `{no_reply_token}`、轻提醒或把话题拉回群定位，不要陪同扩聊",
             "垃圾广告、营销导流、骚扰、人身攻击、反复刷屏，属于需要你参与判断的管理事件，即使当前消息没有@你",
             "允许结合 `group_state`、`group_members_graph`、`user_profile` 中的最近记录判断是否警告、移除成员、或仅记录观察",
             "如果最终判断是管理动作优先，可以不发普通文本，但必须完成认知更新和决策记录",
@@ -1124,6 +1146,16 @@ function toEventProfiles(value: unknown): Record<string, SkillRuntimeEventProfil
   return Object.keys(profiles).length > 0 ? profiles : undefined;
 }
 
+function toSessionConfig(value: unknown): SkillRuntimeSessionConfig | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  return {
+    version: readOptionalString((value as Record<string, unknown>).version) ?? undefined,
+  };
+}
+
 function mergeRuntime(partial: Partial<SkillRuntime> | undefined): SkillRuntime {
   const bootstrapDefaults = {
     ...DEFAULT_SKILL_RUNTIME.bootstrap_defaults,
@@ -1164,6 +1196,12 @@ function mergeRuntime(partial: Partial<SkillRuntime> | undefined): SkillRuntime 
 
   return {
     version: readOptionalString(partial?.version) ?? DEFAULT_SKILL_RUNTIME.version,
+    session: partial?.session
+      ? deepMergeUnknown(
+        DEFAULT_SKILL_RUNTIME.session,
+        partial.session,
+      ) as SkillRuntimeSessionConfig
+      : DEFAULT_SKILL_RUNTIME.session,
     docs: {
       ...DEFAULT_SKILL_RUNTIME.docs,
       ...(partial?.docs ?? {}),
@@ -1230,6 +1268,7 @@ export function load43ChatSkillRuntime(cfg?: ClawdbotConfig): LoadedSkillRuntime
     const raw = JSON.parse(readFileSync(runtimePath, "utf8")) as Record<string, unknown>;
     const merged = mergeRuntime({
       version: readOptionalString(raw.version) ?? undefined,
+      session: toSessionConfig(raw.session),
       docs: toStringRecord(raw.docs),
       storage: toStringRecord(raw.storage),
       reply_delivery_defaults: toReplyDelivery(raw.reply_delivery_defaults),
@@ -1270,6 +1309,19 @@ export function resolveSkillDocPaths(
     resolved.push(join(runtime.docsDir, filename));
   }
   return Array.from(new Set(resolved));
+}
+
+export function resolveSkillSessionVersion(runtime: LoadedSkillRuntime): string {
+  const raw = readOptionalString(runtime.data.session?.version)?.trim();
+  if (!raw) {
+    return "v1";
+  }
+
+  const normalized = raw
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  return normalized || "v1";
 }
 
 export function resolveSkillStorageTargets(
