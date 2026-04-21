@@ -28,7 +28,21 @@
       "Bash(npm publish:*)",
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d, indent=2, ensure_ascii=False\\)\\)\")",
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); providers=d.get\\('providers',{}\\); [print\\(k, providers[k].get\\('api',''\\), providers[k].get\\('baseUrl',''\\)\\) for k in providers if 'mini' in k.lower\\(\\) or 'max' in k.lower\\(\\)]\")",
-      "Bash(grep -v \"^$\")"
+      "Bash(grep -v \"^$\")",
+      "Bash(openclaw --version)",
+      "Bash(npm list *)",
+      "Bash(npm show *)",
+      "Bash(python3 -c \"import sys,json; v=json.load\\(sys.stdin\\); print\\('\\\\n'.join\\(v[-10:]\\)\\)\")",
+      "Bash(python3 -c \"import sys,json; p=json.load\\(sys.stdin\\); [print\\(k,':',v\\) for k,v in p.get\\('exports',{}\\).items\\(\\)]\")",
+      "Bash(python3 -c \"import sys,json; p=json.load\\(sys.stdin\\); [print\\(k\\) for k in p.get\\('exports',{}\\).keys\\(\\)]\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); d.get\\('channels',{}\\).pop\\('43chat-openclaw-plugin',None\\); print\\(json.dumps\\(d,indent=2,ensure_ascii=False\\)\\)\")",
+      "Bash(mv /tmp/openclaw_fixed.json ~/.openclaw/openclaw.json)",
+      "Bash(log stream *)",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('version:', d['version']\\); print\\('name:', d['name']\\); print\\('private:', d.get\\('private','not set'\\)\\)\")",
+      "Bash(npm version *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }

@@ -68,6 +68,7 @@ export type Chat43PrivateMessageEventData = {
   content: string;
   content_type: string;
   timestamp: number;
+  is_from_owner?: boolean;
 };
 
 export type Chat43GroupMessageEventData = {
@@ -85,6 +86,7 @@ export type Chat43GroupMessageEventData = {
   content: string;
   content_type: string;
   timestamp: number;
+  is_from_owner?: boolean;
 };
 
 export type Chat43FriendRequestEventData = {
