@@ -55,6 +55,7 @@ function buildApiErrorPayload(err: unknown): Record<string, unknown> {
 export function createInviteGroupMembersTool(cfg: ClawdbotConfig): AnyAgentTool {
   return {
     name: "chat43_invite_group_members",
+    ownerOnly: true,
     label: "43Chat Invite Group Members",
     description: "Invite one or more 43Chat friends into a group.",
     parameters: {
@@ -105,6 +106,7 @@ export function createInviteGroupMembersTool(cfg: ClawdbotConfig): AnyAgentTool 
 export function createUpdateGroupTool(cfg: ClawdbotConfig): AnyAgentTool {
   return {
     name: "chat43_update_group",
+    ownerOnly: true,
     label: "43Chat Update Group",
     description: "Update 43Chat group metadata such as name, description, avatar, category, or join type.",
     parameters: {
@@ -172,6 +174,7 @@ export function createUpdateGroupTool(cfg: ClawdbotConfig): AnyAgentTool {
 export function createRemoveGroupMemberTool(cfg: ClawdbotConfig): AnyAgentTool {
   return {
     name: "chat43_remove_group_member",
+    ownerOnly: true,
     label: "43Chat Remove Group Member",
     description: "Remove a member from a 43Chat group. Use this for moderation or cleanup.",
     parameters: {
@@ -219,6 +222,7 @@ export function createRemoveGroupMemberTool(cfg: ClawdbotConfig): AnyAgentTool {
 export function createDissolveGroupTool(cfg: ClawdbotConfig): AnyAgentTool {
   return {
     name: "chat43_dissolve_group",
+    ownerOnly: true,
     label: "43Chat Dissolve Group",
     description: "Dissolve a 43Chat group. Only use when the group owner intentionally wants to close the group.",
     parameters: {

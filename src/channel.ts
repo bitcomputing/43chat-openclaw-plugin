@@ -57,13 +57,12 @@ export const chat43Plugin: ChannelPlugin<Resolved43ChatAccount> = {
       const runtime = load43ChatSkillRuntime(cfg);
       const docPaths = Object.values(runtime.data.docs)
         .map((filename) => `${runtime.docsDir}/${filename}`);
-      const storageAliases = Object.entries(runtime.data.storage)
-        .map(([alias, path]) => `${alias}: ${path}`);
       const baseHints = [
         '- 核心规则: 只发送最终回复内容到 43Chat',
         '- 回复流程: 1. 内部查看历史 2. 分析思考 3. 发送最终回复',
         '- 严禁发送: 思考过程, 内部信号, 系统错误, 调试日志',
         '- 只发送: 最终人类可读回复',
+        '- 最终输出协议: 只允许纯文本; 不要输出 JSON / XML / markdown 代码块',
         '- 43Chat 目标: 省略 target 表示回复当前会话; 格式为 user:<id> 或 group:<id>',
         '- 入群申请: 先判断再调用 chat43_handle_group_join_request',
         '- 群管理动作工具: chat43_invite_group_members / chat43_update_group / chat43_remove_group_member / chat43_dissolve_group',
@@ -81,26 +80,20 @@ export const chat43Plugin: ChannelPlugin<Resolved43ChatAccount> = {
         '收到消息时必须执行:',
         '',
         '### 步骤1: 遵循当前事件 profile',
-        '- 事件专属读写要求由插件在上下文中动态注入',
-        '- 必须优先阅读当前事件指定的 Skill 文档和认知文件',
-        '- 不要自创额外认知文件结构',
+        '- 事件专属安全规则由插件在上下文中动态注入',
+        '- 按当前事件决定是回复纯文本还是输出 NO_REPLY',
         '',
         '### 步骤2: 完成内部推理',
         '- 内部推理覆盖字段由当前事件 profile 决定',
-        '- 不要显式输出 `<think>` 块、thinking 文本、XML 标签或思维链；最终只输出当前协议要求的结果',
+        '- 不要显式输出 `<think>` 块、thinking 文本、XML 标签或思维链；最终只输出当前协议要求的纯文本结果',
         '',
         '### 步骤3: 执行决策',
-        '- 根据推理结果回复或沉默',
-        '- `groups/...` 和 `profiles/...` 是 43Chat 存储别名，不是 workspace 相对路径',
-        '- 优先按 prompt 中给出的 absolute 路径读写认知文件；如果 `chat43_*` 工具可见也可以直接用',
-        '- `group_state` / `decision_log` 这类运行态文件由插件自动维护，不要求你手动追加',
+        '- 根据推理结果回复、沉默、或执行允许的群管理工具',
+        '- 不要读写认知 JSON / JSONL 文件，不要维护画像，不要触发后台分析',
         '- 入群申请执行工具，不要只回复文本',
         '',
         '### Skill 文档',
         ...docPaths.map((path) => `- ${path}`),
-        '',
-        '### 存储别名',
-        ...storageAliases.map((entry) => `- ${entry}`),
       ];
     },
   },

@@ -1,6 +1,6 @@
 {
   "name": "@43world/43chat-openclaw-plugin",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "type": "module",
   "description": "43World: 43Chat OpenClaw channel plugin",
   "scripts": {

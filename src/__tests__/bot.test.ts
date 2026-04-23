@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildDispatchConfigForInbound,
+  formatNoReplySystemEvent,
+  formatNoReplyTranscriptMessage,
   looksLikeDispatchTimeoutError,
   looksLikeInternalToolFailureReplyText,
   map43ChatEventToInboundDescriptor,
@@ -46,8 +49,10 @@ describe("43Chat event mapping", () => {
     });
 
     expect(descriptor?.chatType).toBe("direct");
-    expect(descriptor?.text).toContain("你好");
-    expect(descriptor?.text).toContain("43Chat私聊消息");
+    expect(descriptor?.text).toBe("你好");
+    expect(descriptor?.commandAuthorized).toBe(false);
+    expect(descriptor?.groupSystemPrompt).toContain("当前私聊上下文");
+    expect(descriptor?.groupSystemPrompt).toContain("当前发言者不是主人");
   });
 
   it("keeps group message body clean", () => {
@@ -69,12 +74,18 @@ describe("43Chat event mapping", () => {
         content: "你好",
         timestamp: 1000,
       },
+    }, {
+      resolvedRoleNameOverride: "成员",
+      resolvedSenderRoleNameOverride: "管理员",
     });
 
     expect(descriptor?.chatType).toBe("group");
     expect(descriptor?.text).toContain("你好");
-    expect(descriptor?.text).toContain("[来自用户]");
-    expect(descriptor?.text).toContain("[安全提示：");
+    expect(descriptor?.commandAuthorized).toBe(false);
+    expect(descriptor?.groupSystemPrompt).toContain("当前群上下文");
+    expect(descriptor?.groupSystemPrompt).toContain("当前发言者不是主人");
+    expect(descriptor?.groupSystemPrompt).toContain("当前发言者身份: 管理员");
+    expect(descriptor?.groupSystemPrompt).toContain("我的身份: 成员");
   });
 
   it("extracts text payload from json encoded group message content", () => {
@@ -99,7 +110,22 @@ describe("43Chat event mapping", () => {
     });
 
     expect(descriptor?.text).toContain("@小贝 你看看今天北京的天气");
-    expect(descriptor?.text).toContain("[来自用户]");
+    expect(descriptor?.groupSystemPrompt).toContain("当前群上下文");
+    expect(descriptor?.groupSystemPrompt).toContain("当前发言者不是主人");
+  });
+
+  it("denies all tools for non-owner dispatches", () => {
+    const cfg = buildDispatchConfigForInbound({
+      tools: { deny: ["gateway"] },
+    } as any, false);
+
+    expect(cfg.tools?.deny).toContain("gateway");
+    expect(cfg.tools?.deny).toContain("*");
+  });
+
+  it("keeps owner dispatch config unchanged", () => {
+    const baseCfg = { tools: { deny: ["gateway"] } } as any;
+    expect(buildDispatchConfigForInbound(baseCfg, true)).toBe(baseCfg);
   });
 
   it("maps group invitations into a tool-first moderation task", () => {
@@ -126,6 +152,7 @@ describe("43Chat event mapping", () => {
     expect(descriptor?.text).toContain("待处理任务：43Chat 入群申请审核");
     expect(descriptor?.text).toContain("chat43_handle_group_join_request");
     expect(descriptor?.text).toContain("request_id=81");
+    expect(descriptor?.groupSystemPrompt).toContain("当前群上下文");
   });
 
   it("maps group_member_joined events", () => {
@@ -187,5 +214,18 @@ describe("dispatch helpers", () => {
     expect(shouldRetryDispatchAfterFailure({ attempt: 1, maxAttempts: 2, error: new Error("fail") })).toBe(true);
     expect(shouldRetryDispatchAfterFailure({ attempt: 2, maxAttempts: 2, error: new Error("fail") })).toBe(false);
     expect(shouldRetryDispatchAfterFailure({ attempt: 1, maxAttempts: 2 })).toBe(false);
+  });
+
+  it("formats a visible no-reply system event", () => {
+    expect(formatNoReplySystemEvent("msg-1")).toContain("NO_REPLY");
+    expect(formatNoReplySystemEvent("msg-1")).toContain("未向 43Chat 发送消息");
+    expect(formatNoReplySystemEvent("msg-1")).toContain("message_id:msg-1");
+  });
+
+  it("formats a visible no-reply transcript message", () => {
+    expect(formatNoReplyTranscriptMessage("msg-1")).toContain("NO_REPLY");
+    expect(formatNoReplyTranscriptMessage("msg-1")).toContain("本地已记录");
+    expect(formatNoReplyTranscriptMessage("msg-1")).toContain("未向 43Chat 发送消息");
+    expect(formatNoReplyTranscriptMessage("msg-1")).toContain("message_id:msg-1");
   });
 });

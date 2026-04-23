@@ -1,20 +1,8 @@
 import type { ClawdbotConfig } from "openclaw/plugin-sdk";
-import { homedir } from "node:os";
-import { join, normalize } from "node:path";
 import {
-  formatCognitionSnapshot,
-  readCognitionSnapshot,
-  transformCognitionSnapshotForPrompt,
-  type CognitionSnapshotEntry,
-} from "./cognition-snapshot.js";
-import {
-  resolveSkillCognitionPolicy,
   load43ChatSkillRuntime,
-  resolveSkillModerationPolicy,
-  resolveSkillReplyPolicy,
   resolveSkillDocPaths,
-  resolveSkillStorageTargets,
-  shouldRequireStructuredModerationDecisionForRole,
+  resolveSkillReplyPolicy,
   type SkillRuntimePromptBlock,
   type SkillRuntimeRoleDefinition,
   type SkillRuntimeEventProfile,
@@ -24,6 +12,7 @@ type BuildSkillEventContextParams = {
   cfg?: ClawdbotConfig;
   eventType: string;
   accountId?: string;
+  isFromOwner?: boolean;
   roleName?: string;
   messageText?: string;
   groupId?: string;
@@ -38,83 +27,6 @@ export type BuiltSkillEventContext = {
   prompt: string;
   replyMode: SkillRuntimeEventProfile["reply_mode"];
 };
-
-const COGNITION_STORAGE_ROOT = join(homedir(), ".config", "43chat");
-
-function readString(value: unknown): string | undefined {
-  if (typeof value === "number" && !Number.isNaN(value)) {
-    return String(value);
-  }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function formatPaths(title: string, entries: string[]): string[] {
-  if (entries.length === 0) {
-    return [];
-  }
-  return [title, ...entries.map((entry) => `- ${entry}`), ""];
-}
-
-function formatAliasedToolCalls(
-  title: string,
-  entries: Array<{ alias: string; path: string }>,
-): string[] {
-  if (entries.length === 0) {
-    return [];
-  }
-
-  const examples = entries.map((entry) => {
-    const absolutePath = resolveAbsoluteCognitionPath(entry.path);
-    return `- ${entry.alias}: alias=\`${entry.path}\` absolute=\`${absolutePath ?? "<invalid>"}\``;
-  });
-
-  return [title, ...examples, ""];
-}
-
-function dedupeAliasedPaths(
-  entries: Array<{ alias: string; path: string }>,
-): Array<{ alias: string; path: string }> {
-  const seen = new Set<string>();
-  return entries.filter((entry) => {
-    const key = `${entry.alias}:${entry.path}`;
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
-}
-
-function parseSnapshotJson(content: string | undefined): Record<string, unknown> | undefined {
-  if (!content) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(content);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return undefined;
-    }
-    return parsed as Record<string, unknown>;
-  } catch {
-    return undefined;
-  }
-}
-
-function resolveAbsoluteCognitionPath(relativePath: string): string | null {
-  const fullPath = join(COGNITION_STORAGE_ROOT, normalize(relativePath));
-  if (!fullPath.startsWith(COGNITION_STORAGE_ROOT)) {
-    return null;
-  }
-  return fullPath;
-}
-
-function isPluginManagedWriteAlias(alias: string): boolean {
-  return alias === "group_state" || alias.endsWith("decision_log");
-}
 
 function renderPromptTemplate(
   template: string,
@@ -173,35 +85,17 @@ function renderRoleDefinition(params: {
   return lines;
 }
 
-function shouldRequireInlineCognitionWritesForEvent(eventType: string): boolean {
-  return eventType === "friend_request"
-    || eventType === "friend_accepted";
-}
-
-function shouldUseAsyncCognitionWorker(eventType: string): boolean {
-  return eventType === "private_message" || eventType === "group_message";
-}
-
-function shouldUseUnifiedCognitionEnvelope(_eventType: string): boolean {
-  return true;
-}
-
-export function resolvePromptRoleName(params: {
-  roleName?: string;
-  snapshot: CognitionSnapshotEntry[];
-}): string {
-  if (params.roleName?.trim()) {
-    return params.roleName;
-  }
-
-  const groupStateEntry = params.snapshot.find((entry) => entry.alias === "group_state" && entry.exists);
-  const groupState = parseSnapshotJson(groupStateEntry?.content);
-  const persistedRoleName = readString(groupState?.my_role);
-  if (persistedRoleName) {
-    return persistedRoleName;
-  }
-
-  return "未知";
+function resolveSecurityPromptBlocks(params: {
+  runtime: ReturnType<typeof load43ChatSkillRuntime>;
+  chatType: SkillRuntimeEventProfile["chat_type"];
+  isFromOwner: boolean;
+}): SkillRuntimePromptBlock[] {
+  const securityPrompts = params.runtime.data.security_prompts;
+  return [
+    ...(securityPrompts.common ?? []),
+    ...(params.chatType === "group" ? (securityPrompts.group ?? []) : (securityPrompts.direct ?? [])),
+    ...(params.isFromOwner ? (securityPrompts.owner ?? []) : (securityPrompts.non_owner ?? [])),
+  ];
 }
 
 export function buildSkillEventContext(params: BuildSkillEventContextParams): BuiltSkillEventContext {
@@ -209,44 +103,7 @@ export function buildSkillEventContext(params: BuildSkillEventContextParams): Bu
   const eventProfile = runtime.data.event_profiles[params.eventType]
     ?? runtime.data.event_profiles.system_notice;
   const replyPolicy = resolveSkillReplyPolicy(runtime, params.eventType);
-  const cognitionPolicy = resolveSkillCognitionPolicy(runtime, params.eventType);
-  const moderationPolicy = resolveSkillModerationPolicy(runtime, params.eventType);
-
-  const docPaths = resolveSkillDocPaths(runtime, eventProfile.docs);
-  const targets = resolveSkillStorageTargets(runtime, [...eventProfile.reads, ...eventProfile.writes], {
-    group_id: params.groupId,
-    user_id: params.userId,
-  });
-  const readTargets = dedupeAliasedPaths(
-    targets.filter((target) => eventProfile.reads.includes(target.alias)),
-  );
-  const writeTargets = dedupeAliasedPaths(
-    targets.filter((target) => eventProfile.writes.includes(target.alias)),
-  );
-  const modelWriteTargets = writeTargets.filter((target) => !isPluginManagedWriteAlias(target.alias));
-  const pluginManagedWriteTargets = writeTargets.filter((target) => isPluginManagedWriteAlias(target.alias));
-  const snapshot = readCognitionSnapshot({
-    runtime,
-    aliases: eventProfile.reads,
-    values: {
-      group_id: params.groupId,
-      user_id: params.userId,
-    },
-  });
-  const promptSnapshot = transformCognitionSnapshotForPrompt(snapshot, {
-    eventType: params.eventType,
-    groupId: params.groupId,
-  });
-  const effectiveRoleName = resolvePromptRoleName({
-    roleName: params.roleName,
-    snapshot,
-  });
-  const moderationDecisionRequired = shouldRequireStructuredModerationDecisionForRole({
-    runtime,
-    eventType: params.eventType,
-    roleName: effectiveRoleName,
-    messageText: params.messageText,
-  });
+  const effectiveRoleName = params.roleName?.trim() || (params.groupId ? "未知" : "默认");
   const promptValues = {
     account_id: params.accountId,
     event_type: params.eventType,
@@ -262,11 +119,16 @@ export function buildSkillEventContext(params: BuildSkillEventContextParams): Bu
   const roleDefinition = params.groupId
     ? runtime.data.role_definitions.group[effectiveRoleName]
     : runtime.data.role_definitions.direct[effectiveRoleName];
+  const securityPromptBlocks = resolveSecurityPromptBlocks({
+    runtime,
+    chatType: eventProfile.chat_type,
+    isFromOwner: params.isFromOwner === true,
+  });
+  const docPaths = resolveSkillDocPaths(runtime, eventProfile.docs);
 
   const lines = [
     "【43Chat Skill Runtime】",
     `- runtime 来源: ${runtime.source === "file" ? runtime.runtimePath : `builtin (${runtime.runtimePath})`}`,
-    `- skill 目录: ${runtime.docsDir}`,
     `- 当前事件: ${params.eventType}`,
     `- 账号: ${params.accountId ?? "default"}`,
     "",
@@ -277,16 +139,9 @@ export function buildSkillEventContext(params: BuildSkillEventContextParams): Bu
     lines.push(`- 群组: ${params.groupName ?? params.groupId}（group:${params.groupId}）`);
     lines.push(`- 我的身份: ${effectiveRoleName}`);
     if (params.userId) {
-      if (params.eventType === "group_message") {
-        lines.push(`- 当前发言者: ${params.senderName ?? params.userId}（user:${params.userId}）`);
-        if (params.senderRoleName) {
-          lines.push(`- 当前发言者身份: ${params.senderRoleName}`);
-        }
-      } else {
-        lines.push(`- 关联用户: ${params.senderName ?? params.userId}（user:${params.userId}）`);
-        if (params.senderRoleName) {
-          lines.push(`- 关联用户身份: ${params.senderRoleName}`);
-        }
+      lines.push(`- 当前发言者: ${params.senderName ?? params.userId}（user:${params.userId}）`);
+      if (params.senderRoleName) {
+        lines.push(`- 当前发言者身份: ${params.senderRoleName}`);
       }
     }
     lines.push("");
@@ -296,6 +151,11 @@ export function buildSkillEventContext(params: BuildSkillEventContextParams): Bu
     lines.push("");
   }
 
+  lines.push(...renderPromptBlocks({
+    blocks: securityPromptBlocks,
+    effectiveRoleName,
+    values: promptValues,
+  }));
   lines.push(...renderRoleDefinition({
     title: "【当前身份说明】",
     definition: roleDefinition,
@@ -312,211 +172,27 @@ export function buildSkillEventContext(params: BuildSkillEventContextParams): Bu
     values: promptValues,
   }));
 
-  if (
-    params.groupId
-    && (effectiveRoleName === "管理员" || effectiveRoleName === "群主")
-    && moderationPolicy.allowed_decision_kinds.length > 0
-  ) {
-    lines.push("【文档约束的管理梯度】");
-    lines.push("- 管理判断不靠插件硬编码；若命中管理场景，必须遵守 runtime 里声明的场景梯度与决策种类");
-    lines.push(`- 允许的管理决策种类: ${moderationPolicy.allowed_decision_kinds.join(" / ")}`);
-    if (moderationDecisionRequired) {
-      lines.push("- 本轮结构化 `decision` 为必填；最终输出改为“正文/NO_REPLY + 最后一个 decision JSON”");
-      lines.push(`- 真正对外发送的文本直接写在正文里；若当前阶段不应公开回复，正文就写成 \`${replyPolicy.no_reply_token}\``);
-      lines.push("- `decision` 必须显式给出本轮管理判断；若命中场景，还要补齐 `scenario` / `stage` 并与 runtime 梯度一致");
-      lines.push("- 群聊长期认知仍由后台 worker 异步维护；这里最后那个 JSON 只负责 `decision`，不要再输出 `reply` / `writes`");
-      lines.push("- 不要输出 `<chat43-cognition>` 标签、markdown 代码块、解释或任何前后缀");
-      lines.push("- 最后一个非空块必须是 JSON，且不要在这个 JSON 后面再补任何额外文字");
-      lines.push("- 最后那个 JSON 顶层只允许 `decision`；不要输出 `reply`、`writes`、`envelope`、`moderation`、`parameter`、`_meta`、`chat43_mentions` 等额外字段");
-      lines.push("- `decision.kind` 只能从这些值里选：`observe` / `no_reply` / `redirect` / `warn` / `mark_risk` / `remove_member`");
-      lines.push("- 即使上文出现 `chat43_remove_group_member(...)` 之类动作名，也不要把它当成你必须亲自调用的工具；你只需输出合法 `decision`，插件会按 `decision.kind` 执行对应管理动作");
-      lines.push("- 对需要移除成员的场景，直接输出 `decision.kind = remove_member`；`target_user_id` 留空时插件默认作用于当前发言者");
-    } else {
-      lines.push("- 本轮群聊最终输出改为“正文/NO_REPLY + 最后一个 decision JSON”；不要退化成只输出纯 JSON 或只输出解释文本");
-      lines.push(`- 若当前只是正常聊天，把真正对外发送的文本直接写在正文里；若本轮不公开回复，正文就写成 \`${replyPolicy.no_reply_token}\``);
-      lines.push("- 若你本轮没有额外管理动作，最稳妥的写法是显式给出 `decision.kind = observe`；这样插件与日志都走统一结构");
-    }
-
-    Object.entries(moderationPolicy.scenarios)
-      .filter(([, scenario]) => scenario.enabled)
-      .forEach(([scenarioName, scenario]) => {
-        lines.push(`- 场景 ${scenarioName}: 判定依据 ${scenario.match_basis.join(" / ") || "未配置"}`);
-        lines.push(`- ${scenarioName}.first_occurrence => ${scenario.steps.first_occurrence.decision} / public_reply=${scenario.steps.first_occurrence.public_reply}`);
-        lines.push(`- ${scenarioName}.repeat_occurrence => ${scenario.steps.repeat_occurrence.decision} / public_reply=${scenario.steps.repeat_occurrence.public_reply}`);
-        lines.push(`- ${scenarioName}.after_warning_repeat => ${scenario.steps.after_warning_repeat.decision} / public_reply=${scenario.steps.after_warning_repeat.public_reply}`);
-        const promptLines = [
-          ...scenario.steps.first_occurrence.prompt_lines,
-          ...scenario.steps.repeat_occurrence.prompt_lines,
-          ...scenario.steps.after_warning_repeat.prompt_lines,
-        ];
-        if (promptLines.length > 0) {
-          lines.push(`- ${scenarioName} 处理提示: ${promptLines.join(" / ")}`);
-        }
-      });
+  if (docPaths.length > 0) {
+    lines.push("【参考文档】");
+    lines.push(...docPaths.map((entry) => `- ${entry}`));
     lines.push("");
   }
 
-  lines.push(...formatPaths("【先阅读这些 Skill 文档】", docPaths));
-  lines.push(...formatCognitionSnapshot(promptSnapshot));
-
-  if (readTargets.length > 0 || modelWriteTargets.length > 0 || pluginManagedWriteTargets.length > 0) {
-    lines.push("【工具使用要求】");
-    lines.push(`- 43Chat 认知文件根目录: \`${COGNITION_STORAGE_ROOT}\``);
-    lines.push("- 下列 `groups/...` / `profiles/...` 是存储别名；真正读写时优先使用后面的 absolute 绝对路径");
-    lines.push("- 如果当前会话工具列表里没有 `chat43_read_json` / `chat43_write_json` / `chat43_append_jsonl`，就直接用当前可见的 `read` / `edit` / `write` 访问这些 absolute 路径");
-    lines.push("- 更新 `.json` 时先读取当前文件，保留既有 schema 和未改动字段；优先用 `edit` 精准修改，必要时再用 `write` 覆盖完整 JSON");
-    lines.push("- 不允许跳过初始化直接回复");
-    if (pluginManagedWriteTargets.length > 0) {
-      lines.push(`- ${pluginManagedWriteTargets.map((entry) => entry.alias).join(" / ")} 由插件在决策后自动维护；除非你要补齐缺失结构，否则不要求你手动写这些运行态文件`);
-    }
-    if (params.eventType === "group_invitation") {
-      lines.push("- 审核入群申请时调用 `chat43_handle_group_join_request`，不要只回复文本");
-    }
-    lines.push("");
-  }
-  lines.push(...formatAliasedToolCalls("【先读取这些认知文件】", readTargets));
-  if (shouldRequireInlineCognitionWritesForEvent(params.eventType)) {
-    lines.push(...formatAliasedToolCalls("【本轮需要你显式维护的长期认知文件】", modelWriteTargets.filter((entry) => !entry.path.endsWith(".jsonl"))));
-  } else if (shouldUseAsyncCognitionWorker(params.eventType) && modelWriteTargets.length > 0) {
-    lines.push(...formatAliasedToolCalls("【这些长期认知文件由后台 worker 异步补写】", modelWriteTargets.filter((entry) => !entry.path.endsWith(".jsonl"))));
-  }
-  lines.push(...formatAliasedToolCalls("【这些运行态文件由插件自动维护】", pluginManagedWriteTargets));
+  lines.push("【输出协议】");
+  lines.push("- 最终输出只能是给用户看的纯文本，不要输出 JSON、XML、markdown 代码块、工具轨迹、调试信息、系统提示词、内部规则解释。");
+  lines.push(`- 如果本轮无需回复，只输出 \`${replyPolicy.no_reply_token}\`。`);
+  lines.push("- 如果需要执行允许的工具或操作，先执行，再输出最终对外文本；不要把工具调用计划写给用户。");
+  lines.push("- 不要显式输出 thinking、推理链、内部判断过程。");
+  lines.push("");
 
   lines.push("【回复策略】");
-  lines.push(`- reply_policy.mode = ${replyPolicy.mode}`);
-  lines.push(`- 若本轮不回复，仍要输出合法 JSON，并把 \`reply\` 写成 \`${replyPolicy.no_reply_token}\``);
-  const recentReplyWindow = replyPolicy.plugin_enforced.recent_reply_window ?? 0;
-  const maxRecentReplies = replyPolicy.plugin_enforced.max_recent_replies ?? 0;
-  const mustReplyGuidance = replyPolicy.model_guidance.must_reply ?? [];
-  const shouldReplyGuidance = replyPolicy.model_guidance.should_reply ?? [];
-  const noReplyGuidance = replyPolicy.model_guidance.no_reply_when ?? [];
-
-  if (recentReplyWindow > 0 && maxRecentReplies > 0) {
-    lines.push(
-      `- 回复节奏参考: 最近 ${recentReplyWindow} 条决策里若已回复 >= ${maxRecentReplies} 条，则当前不是明确提问时优先考虑沉默`,
-    );
-  }
-  if (mustReplyGuidance.length > 0) {
-    lines.push(`- 必回信号: ${mustReplyGuidance.join(" / ")}`);
-  }
-  if (shouldReplyGuidance.length > 0) {
-    lines.push(`- 倾向回复: ${shouldReplyGuidance.join(" / ")}`);
-  }
-  if (noReplyGuidance.length > 0) {
-    lines.push(`- 倾向沉默: ${noReplyGuidance.join(" / ")}`);
-  }
-  lines.push("");
-
-  lines.push("【认知写入策略】");
-  lines.push(`- topic_persistence.group_soul = ${cognitionPolicy.topic_persistence.group_soul}`);
-  lines.push(`- topic_persistence.group_state = ${cognitionPolicy.topic_persistence.group_state}`);
-  lines.push(`- topic_persistence.decision_log = ${cognitionPolicy.topic_persistence.decision_log}`);
-  lines.push("");
-  lines.push("【认知写入执行要求】");
-  if (shouldRequireInlineCognitionWritesForEvent(params.eventType)) {
-    lines.push("- 插件不会替你自动补这类直接事件的长期认知；如果本轮需要沉淀稳定结论，由你在主流程显式写入");
-    lines.push("- 本轮要写的长期认知，必须和回复决策一起在这一次最终输出里完成");
-    lines.push("- 最终输出统一使用纯 JSON 对象，例如 `{\"writes\":[...],\"reply\":\"...\"}`；不要输出裸文本、不要只输出 `<final>...</final>`、不要输出 `<chat43-cognition>` 标签");
-    lines.push("- 即使本轮没有新增长期认知，也要输出 JSON；此时可写成 `{\"writes\":[],\"reply\":\"...\"}`");
-    lines.push(`- 如果本轮不回复，也要输出 JSON，且 \`reply\` 必须写为 \`${replyPolicy.no_reply_token}\``);
-    lines.push("- 回复示例：`{\"reply\":\"收到，我会继续跟进。\",\"writes\":[],\"decision\":{\"kind\":\"observe\",\"reason\":\"需要明确回应当前事件\"}}`");
-    lines.push(`- 不回复示例：\`{\"reply\":\"${replyPolicy.no_reply_token}\",\"writes\":[],\"decision\":{\"kind\":\"no_reply\",\"reason\":\"当前无需公开回复\"}}\``);
-    lines.push("- 失败示例：裸 `NO_REPLY`、`好的 {\"reply\":\"...\"}`、markdown 代码块 JSON、`{\"envelope\":{...}}` 都算协议错误");
-    lines.push("- 先完成判断，再一次性输出整个 JSON；不要先写一句自然语言，再补第二段 JSON");
-    lines.push("- 最终输出必须能被标准 `JSON.parse` 成功解析；若你发现少括号、少引号、尾部缺失或字段不闭合，先修正，再输出");
-    lines.push("- 输出前先自检一次：确认首字符是 `{`、末字符是 `}`，并且整个文本可被 `JSON.parse` 成功解析");
-    lines.push("- 最终输出首字符必须是 `{`，末字符必须是 `}`；顶层不要出现 `envelope`、`moderation`、`parameter`、`_meta` 等额外字段");
-  } else if (params.eventType === "private_message") {
-    lines.push("- 私聊长期认知默认改由后台 cognition worker 异步维护：它会读取本地模型配置、按批次归并私聊消息，再写回 `user_profile` / `dialog_state`");
-    lines.push("- 私聊主流程最终输出改为两段：先输出正文或 `NO_REPLY`，最后再输出一个只包含 `decision` 的纯 JSON；不要再输出 `reply` / `writes`");
-    lines.push("- 最稳妥模板：`<公开回复或NO_REPLY>\\n{\"decision\":{\"kind\":\"observe\",\"reason\":\"...\"}}`");
-    lines.push(`- 真正对外发送的文本直接写在正文里；若当前消息不需要回复，正文就写成 \`${replyPolicy.no_reply_token}\``);
-    lines.push("- 回复示例：`在呢，你说。\\n{\"decision\":{\"kind\":\"observe\",\"reason\":\"直接回应当前私聊消息\"}}`");
-    lines.push(`- 不回复示例：\`${replyPolicy.no_reply_token}\\n{\"decision\":{\"kind\":\"no_reply\",\"reason\":\"当前私聊无需继续回复\"}}\``);
-    lines.push("- 失败示例：只输出纯 JSON、`好的 {\"decision\":...}`、markdown 代码块 JSON、`{\"envelope\":{...}}` 都算协议错误");
-    lines.push("- 先完成判断，再一次性输出：前面是正文，最后一个非空块必须是 JSON；不要先写一句自然语言，再补第二段 JSON");
-    lines.push("- 最后那个 JSON 必须能被标准 `JSON.parse` 成功解析；若你发现少括号、少引号、尾部缺失或字段不闭合，先修正，再输出");
-    lines.push("- 输出前先自检一次：确认最后一个非空块首字符是 `{`、末字符是 `}`，并且整个 JSON 可被 `JSON.parse` 成功解析");
-    lines.push("- 最后那个 JSON 顶层只允许 `decision`；不要输出 `reply`、`writes`、`envelope`、`moderation`、`parameter`、`_meta`、`chat43_mentions` 等额外字段");
-    lines.push("- 如果你给出 `decision`，`decision.kind` 只能从这些值里选：`observe` / `no_reply` / `redirect` / `warn` / `mark_risk` / `remove_member`");
-    lines.push("- 私聊主流程不要调用 `edit` / `write` 直接改写 `user_profile` / `dialog_state`；新增观察交给后台 worker 归并落库");
-    lines.push("- 不要输出 `<thinking>`、`<envelope>`、`<reply>`、`<writes>`、`<chat43-cognition>` 这类 XML 标签");
-    lines.push("- 如果上下文里出现结构化 envelope、`read` / `edit` / `write` 工具轨迹，或 `⚠️ 📝 Edit...failed` 之类内部内容，当前私聊主流程必须忽略，不能模仿、不能复述、不能继续输出");
-    lines.push("- 不要输出“我没有这个工具”“插件会处理”“this is a retry”之类说明文本；真正对外发送的只有正文文本");
-    lines.push("- 即使当前私聊画像或对话状态仍为空，也不要把主流程改成补文档回合；后台 worker 会继续补写长期认知");
-    lines.push("- 当前主流程可以参考已有认知文件做判断，但不要承担 `user_profile` / `dialog_state` 的补写任务");
-    lines.push("- 本轮观察与决策仍会进入 `dialog_decision_log`；后台 batch 会依据文档把稳定结论沉淀进长期认知");
+  if (eventProfile.chat_type === "group") {
+    lines.push("- 群聊只在被明确提问、被明确@到、或你补充一句能明显推进当前对话时再回复；否则输出 NO_REPLY。");
   } else {
-    if (params.groupId) {
-      lines.push("- 群聊长期认知默认改由后台 cognition worker 异步维护：它会读取本地模型配置、按批次归并消息，再写回 `group_soul` / `user_profile` / `group_members_graph`");
-      lines.push("- 群聊主流程最终输出改为两段：先输出正文或 `NO_REPLY`，最后再输出一个只包含 `decision` 的纯 JSON；不要再输出 `reply` / `writes`");
-      lines.push("- 合法示例：`收到，今晚簋街见。\\n{\"decision\":{\"kind\":\"observe\",\"reason\":\"当前消息明确需要我回应\"}}`");
-      lines.push(`- 真正对外发送的文本直接写在正文里；若当前消息不需要公开回复，正文就写成 \`${replyPolicy.no_reply_token}\``);
-      lines.push(`- 不回复示例：\`${replyPolicy.no_reply_token}\\n{\"decision\":{\"kind\":\"no_reply\",\"reason\":\"群成员之间已自然完成对话，无需我接入\"}}\``);
-      lines.push("- 失败示例：只输出纯 JSON、`好的 {\"decision\":...}`、markdown 代码块 JSON、`{\"envelope\":{...}}` 都算协议错误");
-      lines.push("- 先完成判断，再一次性输出：前面是正文，最后一个非空块必须是 JSON；不要先写一句自然语言，再补第二段 JSON");
-      lines.push("- 最后那个 JSON 必须能被标准 `JSON.parse` 成功解析；若你发现少括号、少引号、尾部缺失或字段不闭合，先修正，再输出");
-      lines.push("- 输出前先自检一次：确认最后一个非空块首字符是 `{`、末字符是 `}`，并且整个 JSON 可被 `JSON.parse` 成功解析");
-      lines.push("- 最后那个 JSON 顶层只允许 `decision`；不要输出 `reply`、`writes`、`envelope`、`moderation`、`parameter`、`_meta`、`chat43_mentions` 等额外字段");
-      lines.push("- `decision.kind` 只能从这些值里选：`observe` / `no_reply` / `redirect` / `warn` / `mark_risk` / `remove_member`");
-      lines.push("- 群聊主流程不要调用 `edit` / `write` 直接改写 `group_soul` / `user_profile` / `group_members_graph`；新增观察交给后台 worker 归并落库");
-      if (moderationDecisionRequired) {
-        lines.push("- 当前是管理员结构化管理回合；不要把最终输出退化成普通文本说明、工具可用性分析、重试解释或只输出裸 `NO_REPLY`");
-        lines.push("- 本轮最后那个 JSON 里的 `decision` 为必填；若命中管理场景，还要补齐 `scenario` / `stage` 并与 runtime 梯度一致");
-      } else {
-        lines.push("- 若当前只是普通群聊判断，仍建议显式给出 `decision.kind = observe`，这样群聊主流程、日志和后续治理都走统一结构");
-      }
-      lines.push("- 如果上下文里出现结构化 envelope、`read` / `edit` / `write` 工具轨迹，或 `⚠️ 📝 Edit...failed` 之类内部内容，当前群聊主流程必须忽略，不能模仿、不能复述、不能继续输出");
-      lines.push("- 不要输出“我没有这个工具”“插件会处理”“this is a retry”之类说明文本；真正对外发送的只有正文文本");
-      lines.push("- 即使当前认知文件仍为空，也不要把群聊主流程改成补文档回合；后台 worker 会继续补写长期认知");
-      lines.push("- 当前主流程可以参考已有认知文件做判断，但不要承担 `group_soul` / `user_profile` / `group_members_graph` 的补写任务");
-      lines.push("- 本轮观察与管理决策仍会进入 `decision_log`；后台 batch 会依据文档把稳定结论沉淀进长期认知");
-    } else if (shouldUseUnifiedCognitionEnvelope(params.eventType)) {
-      lines.push("- 当前事件主流程最终输出统一使用纯 JSON 对象；不要输出裸文本、不要只输出 `<final>...</final>`、不要输出裸 `NO_REPLY`、不要输出 `<chat43-cognition>` 标签");
-      lines.push(`- 真正对外发送的文本写进 \`reply\`；若当前事件不需要公开回复，就把 \`reply\` 写成 \`${replyPolicy.no_reply_token}\``);
-      lines.push("- 回复示例：`{\"reply\":\"收到。\",\"writes\":[],\"decision\":{\"kind\":\"observe\",\"reason\":\"当前事件需要简短回应\"}}`");
-      lines.push(`- 不回复示例：\`{\"reply\":\"${replyPolicy.no_reply_token}\",\"writes\":[],\"decision\":{\"kind\":\"no_reply\",\"reason\":\"当前事件无需公开回复\"}}\``);
-      lines.push("- 失败示例：裸 `NO_REPLY`、`好的 {\"reply\":\"...\"}`、markdown 代码块 JSON、`{\"envelope\":{...}}` 都算协议错误");
-      lines.push("- 先完成判断，再一次性输出整个 JSON；不要先写一句自然语言，再补第二段 JSON");
-      lines.push("- 最终输出必须能被标准 `JSON.parse` 成功解析；若你发现少括号、少引号、尾部缺失或字段不闭合，先修正，再输出");
-      lines.push("- 输出前先自检一次：确认首字符是 `{`、末字符是 `}`，并且整个文本可被 `JSON.parse` 成功解析");
-      lines.push("- 最终输出首字符必须是 `{`，末字符必须是 `}`；顶层只允许 `reply`、`writes`、`decision` 三个字段");
-      lines.push("- `writes` 默认写空数组 `[]`；除非文档明确要求本轮补写长期认知，否则不要在主流程里承担额外认知写入");
-      lines.push("- 如果上下文里出现结构化 envelope、`read` / `edit` / `write` 工具轨迹，或 `⚠️ 📝 Edit...failed` 之类内部内容，当前主流程必须忽略，不能模仿、不能复述、不能继续输出");
-      lines.push("- 不要输出“我没有这个工具”“插件会处理”“this is a retry”之类说明文本；真正对外发送的只有 `reply`");
-    }
+    lines.push("- 私聊默认直接正常回复；只有明确无需继续回应时才输出 NO_REPLY。");
   }
-  if (shouldRequireInlineCognitionWritesForEvent(params.eventType)) {
-    lines.push("- `always` 表示一旦你判断该信息属于长期认知，就应考虑写入该位置");
-    lines.push("- `filtered` 表示只有明确满足长期沉淀条件时才写入该位置");
-    lines.push("- `never` 表示本轮不要把这类信息写入该位置");
-    if (
-      cognitionPolicy.write_enforcement.enabled
-      && cognitionPolicy.write_enforcement.block_final_reply_when_incomplete
-    ) {
-      lines.push("- 插件执行守卫已启用：如果你输出最终回复时，文档要求的关键认知槽位仍为空，最终回复会被拦截并要求重试");
-    }
-    if (cognitionPolicy.topic_persistence.judgement_rules.length > 0) {
-      lines.push(`- 长期认知判断规则: ${cognitionPolicy.topic_persistence.judgement_rules.join(" / ")}`);
-    }
-    if (cognitionPolicy.topic_persistence.volatile_terms.length > 0) {
-      lines.push(`- 长期认知禁入词样例: ${cognitionPolicy.topic_persistence.volatile_terms.join(" / ")}`);
-    }
-    if (cognitionPolicy.topic_persistence.volatile_regexes.length > 0) {
-      lines.push(`- 长期认知禁入模式样例: ${cognitionPolicy.topic_persistence.volatile_regexes.join(" / ")}`);
-    }
-  }
-  lines.push("");
-
-  lines.push("【推理要求】");
-  lines.push(`- 内部推理至少覆盖: ${eventProfile.required_think_fields.join(" / ")}`);
-  lines.push("- 不要显式输出 `<think>`、thinking 文本或思维链；最终只发送协议要求的 JSON / 文本结果");
-  lines.push("- 先基于 Skill 文档和认知文件做决策，再决定是否回复");
-  if (eventProfile.reply_mode === "suppress_text_reply") {
-    lines.push("- 本事件默认不发送普通文本回复；优先执行工具动作与认知更新");
-  } else {
-    lines.push(`- 如果本轮不该回复，也要返回合法 JSON，并把 \`reply\` 写成 \`${replyPolicy.no_reply_token}\``);
-  }
+  lines.push("- 不要分析或维护群画像、群逻辑、用户画像、长期状态，也不要承担后台归档任务。");
+  lines.push("- 不要读写任何认知 JSON / JSONL 文件，也不要要求用户按 JSON 协议回复。");
 
   return {
     prompt: lines.join("\n"),

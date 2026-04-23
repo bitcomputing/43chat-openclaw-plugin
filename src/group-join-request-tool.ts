@@ -129,6 +129,7 @@ async function resolvePendingRequestId(cfg: ClawdbotConfig, params: ToolParams):
 export function createHandleGroupJoinRequestTool(cfg: ClawdbotConfig): AnyAgentTool {
   return {
     name: "chat43_handle_group_join_request",
+    ownerOnly: true,
     label: "43Chat Join Request",
     description:
       "Approve or reject a 43Chat group join request. Use this for 43Chat group_invitation/join-request events when you need to actually process the application.",

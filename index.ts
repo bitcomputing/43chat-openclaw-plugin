@@ -7,9 +7,6 @@ import {
   createUpdateGroupTool,
 } from "./src/group-management-tools.js";
 import { createHandleGroupJoinRequestTool } from "./src/group-join-request-tool.js";
-import { createAppendJsonlTool } from "./src/tools/append-jsonl.js";
-import { createReadJsonTool } from "./src/tools/read-json.js";
-import { createWriteJsonTool } from "./src/tools/write-json.js";
 import { set43ChatRuntime } from "./src/runtime.js";
 import packageJson from "./package.json" with { type: "json" };
 
@@ -29,18 +26,6 @@ const plugin = {
     api.registerTool(
       (ctx) => ctx.config ? createHandleGroupJoinRequestTool(ctx.config) : null,
       { name: "chat43_handle_group_join_request" },
-    );
-    api.registerTool(
-      (ctx) => ctx.config ? createReadJsonTool(ctx.config) : null,
-      { name: "chat43_read_json" },
-    );
-    api.registerTool(
-      (ctx) => ctx.config ? createWriteJsonTool(ctx.config) : null,
-      { name: "chat43_write_json" },
-    );
-    api.registerTool(
-      (ctx) => ctx.config ? createAppendJsonlTool(ctx.config) : null,
-      { name: "chat43_append_jsonl" },
     );
     api.registerTool(
       (ctx) => ctx.config ? createInviteGroupMembersTool(ctx.config) : null,
