@@ -12,6 +12,12 @@ import { ensureGroupRoleName, resolveGroupRoleName } from "./prompt-group-contex
 import { buildSkillEventContext } from "./skill-event-context.js";
 import { extract43ChatTextContent, truncateForLog, mapGroupRoleName } from "./message-content.js";
 import { ensureSessionLogDir, resolveSessionLogDir } from "./session-log-dir.js";
+import { load43ChatSkillRuntime, resolveSkillStrictAuthzPolicy } from "./skill-runtime.js";
+import {
+  buildNonOwnerSafetyJudgeBody,
+  buildNonOwnerSafetyJudgePrompt,
+  parseNonOwnerSafetyDecision,
+} from "./authz.js";
 import type {
   Chat43AnySSEEvent,
   Chat43FriendAcceptedEventData,
@@ -73,6 +79,14 @@ export function summarizeReplyPayloadForLog(reply: {
     summary.text = truncateForLog(summary.text, 240);
   }
   return JSON.stringify(summary);
+}
+
+function stringifyForLog(payload: unknown): string {
+  try {
+    return JSON.stringify(payload);
+  } catch {
+    return String(payload);
+  }
 }
 
 async function appendLocalTranscriptMessage(params: {
@@ -312,6 +326,12 @@ export function buildDispatchConfigForInbound(cfg: ClawdbotConfig, isFromOwner: 
     tools: {
       ...cfg.tools,
       deny: Array.from(new Set([...(cfg.tools?.deny ?? []), "*"])),
+      exec: { ...((cfg.tools as any)?.exec ?? {}), security: "deny" },
+      web: {
+        ...((cfg.tools as any)?.web ?? {}),
+        fetch: { enabled: false },
+        search: { enabled: false },
+      },
     },
   };
 }
@@ -699,6 +719,106 @@ export async function handle43ChatEvent(
     }
   };
 
+  const wasMentioned = inbound.chatType !== "group" || /(^|\s)@\S+/u.test(inbound.text);
+
+  const runNonOwnerSafetyJudge = async (): Promise<{ decision: "deny" | "allow_text" | "no_reply"; reply: string; raw: string }> => {
+    const policy = resolveSkillStrictAuthzPolicy(load43ChatSkillRuntime(cfg));
+    const refusalText = policy.enabled ? policy.refusal_text : "无权限操作";
+    const judgeSessionKey = sessionKey;
+    const judgeStartedAt = Date.now();
+    const judgePrompt = buildNonOwnerSafetyJudgePrompt({
+      refusalText,
+      chatType: inbound.chatType,
+      senderName: inbound.senderName,
+      senderId: inbound.senderId,
+      wasMentioned,
+    });
+    const judgeBody = buildNonOwnerSafetyJudgeBody(inbound.text);
+    const judgeCfg = buildDispatchConfigForInbound(cfg, false);
+    const judgeCtxPayload = core.channel.reply.finalizeInboundContext({
+      Body: judgeBody,
+      BodyForAgent: judgeBody,
+      BodyForCommands: judgeBody,
+      RawBody: judgeBody,
+      CommandBody: judgeBody,
+      From: inbound.fromAddress,
+      To: inbound.target,
+      SessionKey: judgeSessionKey,
+      AccountId: route.accountId,
+      ChatType: inbound.chatType,
+      ConversationLabel: inbound.conversationLabel,
+      GroupSubject: inbound.groupSubject,
+      GroupSystemPrompt: judgePrompt,
+      OwnerAllowFrom: [],
+      SenderName: inbound.senderName,
+      SenderId: inbound.senderId,
+      Provider: CHANNEL_ID,
+      Surface: CHANNEL_ID,
+      MessageSid: inbound.messageId,
+      Timestamp: inbound.timestamp,
+      WasMentioned: wasMentioned,
+      CommandAuthorized: false,
+      ForceSenderIsOwnerFalse: true,
+      OriginatingChannel: CHANNEL_ID,
+      OriginatingTo: inbound.target,
+    });
+
+    let raw = "";
+    let replyDispatcherErrored = false;
+    const { dispatcher, replyOptions, markDispatchIdle } = core.channel.reply.createReplyDispatcherWithTyping({
+      deliver: async (reply: { text?: string; mediaUrl?: string; mediaUrls?: string[] }, { kind }: { kind: string }) => {
+        if (kind !== "final") return;
+        if ((reply as any).isError || looksLikeInternalToolFailureReplyText(reply.text ?? "")) return;
+        const text = reply.text ?? "";
+        if (text.trim()) raw = unwrapFinalReplyTag(text);
+      },
+      onError: (err: unknown, info: { kind: string }) => {
+        replyDispatcherErrored = true;
+        error(`43chat[${accountId}] non-owner authz ${info.kind} reply failed: ${String(err)}`);
+      },
+      onIdle: () => {},
+    });
+
+    const runDispatch = () => core.channel.reply.dispatchReplyFromConfig({
+      ctx: judgeCtxPayload,
+      cfg: judgeCfg,
+      dispatcher,
+      replyOptions: { ...replyOptions, disableBlockStreaming: true },
+    });
+    const withReplyDispatcher = (core.channel.reply as any).withReplyDispatcher;
+    if (typeof withReplyDispatcher === "function") {
+      await withReplyDispatcher({ dispatcher, run: runDispatch, onSettled: () => markDispatchIdle() });
+    } else {
+      try { await runDispatch(); } finally { markDispatchIdle(); }
+    }
+
+    if (!raw.trim() || replyDispatcherErrored) {
+      const trace = await inspectRecentAssistantOutputFromSessionLog({ sessionKey: judgeSessionKey, sinceTimestamp: judgeStartedAt });
+      if (trace?.finalText) raw = trace.finalText.trim();
+    }
+
+    const parsed = parseNonOwnerSafetyDecision(raw, refusalText);
+    return { ...parsed, raw };
+  };
+
+  if (inbound.isFromOwner !== true) {
+    const decision = await runNonOwnerSafetyJudge();
+    log(`43chat[${accountId}]: non_owner_safety_decision message=${inbound.messageId} decision=${decision.decision} reply=${truncateForLog(decision.reply || "<empty>", 120)} raw=${truncateForLog(decision.raw || "<empty>", 160)}`);
+    if (decision.decision === "allow_text") {
+      await sendReply(decision.reply);
+    } else if (decision.decision === "deny") {
+      await sendReply(decision.reply);
+    }
+    return {
+      messageId: inbound.messageId,
+      senderId: inbound.senderId,
+      text: inbound.text,
+      timestamp: inbound.timestamp,
+      target: inbound.target,
+      chatType: inbound.chatType,
+    };
+  }
+
   const maxAttempts = MAX_EMPTY_MAIN_REPLY_ATTEMPTS;
   let retryAttempted = false;
   let retryReason = "";
@@ -706,6 +826,7 @@ export async function handle43ChatEvent(
   const runDispatchAttempt = async (attemptInbound: InboundDescriptor) => {
     const attemptStartedAt = Date.now();
     const dispatchCfg = buildDispatchConfigForInbound(cfg, attemptInbound.isFromOwner === true);
+    const effectiveGroupSystemPrompt = attemptInbound.groupSystemPrompt;
     const ctxPayload = core.channel.reply.finalizeInboundContext({
       Body: core.channel.reply.formatInboundEnvelope({
         channel: CHANNEL_ID, from: attemptInbound.conversationLabel,
@@ -720,7 +841,7 @@ export async function handle43ChatEvent(
       SessionKey: sessionKey, AccountId: route.accountId,
       ChatType: attemptInbound.chatType, ConversationLabel: attemptInbound.conversationLabel,
       GroupSubject: attemptInbound.groupSubject,
-      GroupSystemPrompt: attemptInbound.groupSystemPrompt,
+      GroupSystemPrompt: effectiveGroupSystemPrompt,
       OwnerAllowFrom: attemptInbound.isFromOwner ? buildOwnerAllowFromEntries(attemptInbound) : [],
       SenderName: attemptInbound.senderName, SenderId: attemptInbound.senderId,
       Provider: CHANNEL_ID, Surface: CHANNEL_ID,
@@ -730,6 +851,30 @@ export async function handle43ChatEvent(
       ForceSenderIsOwnerFalse: attemptInbound.isFromOwner ? undefined : true,
       OriginatingChannel: CHANNEL_ID, OriginatingTo: attemptInbound.target,
     });
+
+    log(`43chat[${accountId}]: llm_request_payload=${stringifyForLog({
+      message_id: attemptInbound.messageId,
+      session_key: sessionKey,
+      account_id: route.accountId,
+      chat_type: attemptInbound.chatType,
+      conversation_label: attemptInbound.conversationLabel,
+      sender_id: attemptInbound.senderId,
+      sender_name: attemptInbound.senderName,
+      is_from_owner: attemptInbound.isFromOwner === true,
+      command_authorized: attemptInbound.commandAuthorized ?? true,
+      force_sender_is_owner_false: attemptInbound.isFromOwner ? undefined : true,
+      owner_allow_from: attemptInbound.isFromOwner ? buildOwnerAllowFromEntries(attemptInbound) : [],
+      dispatch_tools_deny: dispatchCfg.tools?.deny ?? [],
+      from: attemptInbound.fromAddress,
+      to: attemptInbound.target,
+      group_subject: attemptInbound.groupSubject ?? "",
+      group_system_prompt: effectiveGroupSystemPrompt ?? "",
+      body_for_agent: attemptInbound.text,
+      body_for_commands: attemptInbound.text,
+      raw_body: attemptInbound.text,
+      command_body: attemptInbound.text,
+      timestamp: attemptInbound.timestamp,
+    })}`);
 
     let deliverSawFinal = false;
     let replyDispatcherErrored = false;
@@ -798,7 +943,23 @@ export async function handle43ChatEvent(
 
     if (!result) throw new Error(`43chat[${accountId}]: dispatch settled without result`);
 
-    const finalReplyText = result.finalText;
+    let finalReplyText = result.finalText;
+
+    if (inbound.isFromOwner !== true && finalReplyText) {
+      const sensitivePatterns = [
+        /\/Users\/[^\s]+/,
+        /\/home\/[^\s]+/,
+        /~\/[^\s]+/,
+        /C:\\[^\s]+/,
+        /桌面上.{0,10}(个|共|有)\s*\d+/,
+        /ls\s+-/,
+        /\.ovpn|\.sql|\.yaml|\.json|\.csv/i,
+      ];
+      if (sensitivePatterns.some(p => p.test(finalReplyText))) {
+        log(`43chat[${accountId}]: non_owner_output_blocked message=${inbound.messageId} raw=${truncateForLog(finalReplyText, 80)}`);
+        finalReplyText = "无权限操作";
+      }
+    }
     log(`43chat[${accountId}]: final reply=${truncateForLog(finalReplyText || "<empty>", 240)} retry=${retryAttempted} retry_reason=${retryReason}`);
 
     if (result.replyDispatcherErrored) {
@@ -811,7 +972,7 @@ export async function handle43ChatEvent(
       log(`43chat[${accountId}]: model chose ${NO_REPLY_TOKEN} for ${inbound.messageId}`);
       core.system.enqueueSystemEvent(formatNoReplySystemEvent(inbound.messageId), {
         sessionKey,
-        contextKey: `${CHANNEL_ID}:${inbound.messageId}:no_reply`,
+        contextKey: `${CHANNEL_ID}:${inbound.messageId}`,
       });
       if (sessionFile) {
         try {

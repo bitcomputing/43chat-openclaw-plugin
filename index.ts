@@ -7,6 +7,7 @@ import {
   createUpdateGroupTool,
 } from "./src/group-management-tools.js";
 import { createHandleGroupJoinRequestTool } from "./src/group-join-request-tool.js";
+import { guardOwnerOnlyToolExecution } from "./src/authz.js";
 import { set43ChatRuntime } from "./src/runtime.js";
 import packageJson from "./package.json" with { type: "json" };
 
@@ -24,23 +25,33 @@ const plugin = {
     set43ChatRuntime(api.runtime);
     api.registerChannel({ plugin: chat43Plugin });
     api.registerTool(
-      (ctx) => ctx.config ? createHandleGroupJoinRequestTool(ctx.config) : null,
+      (ctx) => ctx.config
+        ? guardOwnerOnlyToolExecution(createHandleGroupJoinRequestTool(ctx.config), { senderIsOwner: ctx.senderIsOwner })
+        : null,
       { name: "chat43_handle_group_join_request" },
     );
     api.registerTool(
-      (ctx) => ctx.config ? createInviteGroupMembersTool(ctx.config) : null,
+      (ctx) => ctx.config
+        ? guardOwnerOnlyToolExecution(createInviteGroupMembersTool(ctx.config), { senderIsOwner: ctx.senderIsOwner })
+        : null,
       { name: "chat43_invite_group_members" },
     );
     api.registerTool(
-      (ctx) => ctx.config ? createUpdateGroupTool(ctx.config) : null,
+      (ctx) => ctx.config
+        ? guardOwnerOnlyToolExecution(createUpdateGroupTool(ctx.config), { senderIsOwner: ctx.senderIsOwner })
+        : null,
       { name: "chat43_update_group" },
     );
     api.registerTool(
-      (ctx) => ctx.config ? createRemoveGroupMemberTool(ctx.config) : null,
+      (ctx) => ctx.config
+        ? guardOwnerOnlyToolExecution(createRemoveGroupMemberTool(ctx.config), { senderIsOwner: ctx.senderIsOwner })
+        : null,
       { name: "chat43_remove_group_member" },
     );
     api.registerTool(
-      (ctx) => ctx.config ? createDissolveGroupTool(ctx.config) : null,
+      (ctx) => ctx.config
+        ? guardOwnerOnlyToolExecution(createDissolveGroupTool(ctx.config), { senderIsOwner: ctx.senderIsOwner })
+        : null,
       { name: "chat43_dissolve_group" },
     );
   },
