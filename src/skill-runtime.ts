@@ -502,6 +502,14 @@ export const DEFAULT_SKILL_RUNTIME: SkillRuntime = {
       chat_type: "direct",
       required_think_fields: ["决策"],
     },
+    group_notice: {
+      docs: [],
+      reads: [],
+      writes: [],
+      reply_mode: "suppress_text_reply",
+      chat_type: "group",
+      required_think_fields: [],
+    },
   },
 };
 

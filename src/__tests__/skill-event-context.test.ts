@@ -37,4 +37,21 @@ describe("skill event context", () => {
     expect(context.prompt).toContain("直接执行允许的工具");
     expect(context.prompt).not.toContain("decision JSON");
   });
+
+  it("lets owner group messages reply normally", () => {
+    const context = buildSkillEventContext({
+      eventType: "group_message",
+      accountId: "default",
+      groupId: "99",
+      groupName: "测试群",
+      userId: "12445",
+      senderName: "测试用户",
+      senderRoleName: "成员",
+      roleName: "成员",
+      isFromOwner: true,
+    });
+
+    expect(context.prompt).toContain("当前发言者是主人，群里可按正常会话直接回复");
+    expect(context.prompt).toContain("不要因为“没有 @”而机械沉默");
+  });
 });

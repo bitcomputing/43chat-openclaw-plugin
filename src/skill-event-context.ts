@@ -187,7 +187,12 @@ export function buildSkillEventContext(params: BuildSkillEventContextParams): Bu
 
   lines.push("【回复策略】");
   if (eventProfile.chat_type === "group") {
-    lines.push("- 群聊只在被明确提问、被明确@到、或你补充一句能明显推进当前对话时再回复；否则输出 NO_REPLY。");
+    if (params.isFromOwner === true) {
+      lines.push("- 当前发言者是主人，群里可按正常会话直接回复；只有明确无需继续回应时才输出 NO_REPLY。");
+      lines.push("- 如果当前消息明显是主人在和你对话，就不要因为“没有 @”而机械沉默。");
+    } else {
+      lines.push("- 群聊只在被明确提问、被明确@到、或你补充一句能明显推进当前对话时再回复；否则输出 NO_REPLY。");
+    }
   } else {
     lines.push("- 私聊默认直接正常回复；只有明确无需继续回应时才输出 NO_REPLY。");
   }

@@ -51,6 +51,7 @@ export type Chat43EventType =
   | "group_invitation"
   | "group_member_joined"
   | "system_notice"
+  | "group_notice"
   | "heartbeat";
 
 export type Chat43SSEEventEnvelope<T = unknown> = {
@@ -132,6 +133,13 @@ export type Chat43SystemNoticeEventData = {
   timestamp: number;
 };
 
+export type Chat43GroupNoticeEventData = {
+  group_id: number;
+  group_name: string;
+  notice: string;
+  timestamp: number;
+};
+
 export type Chat43AnySSEEvent =
   | Chat43SSEEventEnvelope<Chat43PrivateMessageEventData>
   | Chat43SSEEventEnvelope<Chat43GroupMessageEventData>
@@ -139,7 +147,8 @@ export type Chat43AnySSEEvent =
   | Chat43SSEEventEnvelope<Chat43FriendAcceptedEventData>
   | Chat43SSEEventEnvelope<Chat43GroupInvitationEventData>
   | Chat43SSEEventEnvelope<Chat43GroupMemberJoinedEventData>
-  | Chat43SSEEventEnvelope<Chat43SystemNoticeEventData>;
+  | Chat43SSEEventEnvelope<Chat43SystemNoticeEventData>
+  | Chat43SSEEventEnvelope<Chat43GroupNoticeEventData>;
 
 export type Chat43OpenApiResponse<T> = {
   code: number;
