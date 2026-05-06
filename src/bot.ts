@@ -789,10 +789,10 @@ function buildInboundDescriptor(
       });
       return {
         dedupeKey, messageId, chatType: "group", target: `group:${data.group_id}`,
-        fromAddress: `${CHANNEL_ID}:user:0`, senderId: "0", senderName: "system",
+        fromAddress: `${CHANNEL_ID}:group:${data.group_id}`, senderId: "0", senderName: "system",
         text: wrapMessageText(`[群提示] ${data.notice || ""}`.trim(), false),
         timestamp: data.timestamp || event.timestamp || Date.now(),
-        conversationLabel: `group:${data.group_id}`,
+        groupSubject: String(data.group_id), conversationLabel: `group:${data.group_id}`,
         groupSystemPrompt: skillContext.prompt,
         isFromOwner: false,
         commandAuthorized: false,
