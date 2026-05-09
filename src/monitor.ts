@@ -3,7 +3,6 @@ import { listEnabled43ChatAccounts, resolve43ChatAccount } from "./accounts.js";
 import { create43ChatClient, Chat43ApiError } from "./client.js";
 import { handle43ChatEvent } from "./bot.js";
 import { waitUntilAbortCompat } from "./plugin-sdk-compat.js";
-import { startPromptGroupContextRefresher, stopPromptGroupContextRefresher } from "./prompt-group-context.js";
 import type { Chat43AnySSEEvent, Chat43RuntimeStatusPatch, Resolved43ChatAccount } from "./types.js";
 
 export type Monitor43ChatOpts = {
@@ -103,7 +102,6 @@ async function monitorSingleAccount(params: {
   }
 
   combinedSignal?.addEventListener("abort", stopStatus, { once: true });
-  startPromptGroupContextRefresher({ account, runtime });
 
   try {
     while (!combinedSignal?.aborted) {
@@ -239,7 +237,6 @@ async function monitorSingleAccount(params: {
       }
     }
   } finally {
-    stopPromptGroupContextRefresher(accountId, runtime);
     if (monitorControllers.get(accountId) === localController) {
       monitorControllers.delete(accountId);
     }

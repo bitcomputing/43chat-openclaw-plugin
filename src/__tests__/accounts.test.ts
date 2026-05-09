@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { resolve43ChatAccount } from "../accounts.js";
 
 describe("43Chat account defaults", () => {
-  it("uses raw chunk mode by default", () => {
+  it("resolves the default account from channel config", () => {
     const account = resolve43ChatAccount({
       cfg: {
         channels: {
@@ -14,6 +14,10 @@ describe("43Chat account defaults", () => {
       } as any,
     });
 
-    expect(account.config.chunkMode).toBe("raw");
+    expect(account.accountId).toBe("default");
+    expect(account.enabled).toBe(true);
+    expect(account.configured).toBe(true);
+    expect(account.baseUrl).toBe("https://43chat.cn");
+    expect(account.apiKey).toBe("test-key");
   });
 });

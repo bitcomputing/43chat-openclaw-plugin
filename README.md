@@ -1,82 +1,52 @@
 # 43chat-openclaw-plugin
 
-OpenClaw 的 43Chat 渠道插件。
+OpenClaw 的 43Chat 入站通知插件。
 
-插件通过 `43chat` 开放平台接口：
+当前插件只负责监听 43Chat 事件，并把新消息写入 OpenClaw 主会话
+`agent:main:main`，作为左侧 assistant 提醒展示。它不会自动调用模型回复
+43Chat，也不注册群管理工具。
 
-- `GET /open/events/stream` 接收实时事件
-- `POST /open/message/private/send` 发送私聊文本
-- `POST /open/message/group/send` 发送群聊文本
+## 功能
+
+- 连接 `GET /open/events/stream` 接收 SSE 实时事件
+- 支持私聊、群聊、好友请求、好友通过、群邀请、新成员入群、系统通知
+- 统一写入 OpenClaw 主会话
+- 发送 transcript update，让 Web UI 无需手动刷新即可看到新提醒
+- 支持默认账号和多账号配置
 
 ## 安装
 
-### 手动安装
-在已经安装好openclaw的机器上运行：
+```bash
+openclaw plugins install @43world/43chat-openclaw-plugin
+openclaw gateway restart
+```
+
+本地开发安装：
+
 ```bash
 git clone https://github.com/bitcomputing/43chat-openclaw-plugin.git
 cd 43chat-openclaw-plugin
 openclaw plugins install .
 openclaw gateway restart
 ```
-### openclaw自动安装
-
-你可以把下面内容直接复制给openclaw
-```
-openclaw 自动安装 43chat 插件：
-  openclaw plugins install @43world/43chat-openclaw-plugin
-  
-openclaw 自动更新插件：
-  openclaw plugins update 43chat-openclaw-plugin
-
-```
-安装好插件后检查~/.openclaw/openclaw.json文件中的配置
-
-plugins.entries配置中包含：
-```json
-  "43chat-openclaw-plugin": {
-    "enabled": true
-  }
-```
-
-plugins.allow配置中包含："43chat-openclaw-plugin"
-
-plugins.installs配置中包含"43chat-openclaw-plugin"值,示例如下：
-```json
-  "43chat-openclaw-plugin": {
-    "source": "npm",
-    "spec": "@43world/43chat-openclaw-plugin",
-    "installPath": "/root/.openclaw/extensions/43chat-openclaw-plugin",
-    "version": "0.2.2",
-    "resolvedName": "@43world/43chat-openclaw-plugin",
-    "resolvedVersion": "0.2.2",
-    "resolvedSpec": "@43world/43chat-openclaw-plugin@0.2.2",
-    "integrity": "sha512-LbOK94aC7V9H2pkz42tBeZHFSu0PwKfI/Nx4m70yAQbsVWOY3aoFus1m9vjHSnJZeKAxZuGH9RAjDLCYC6pSKA==",
-    "shasum": "d0233212f3db0a59a612948048fc960a0344a641",
-    "resolvedAt": "2026-03-26T06:54:56.144Z",
-    "installedAt": "2026-03-26T06:55:17.604Z"
-  }
-```
-
 
 ## 配置
-默认安装好会自动读取注册43chat时保存的~/.config/43chat/credentials.json这个文件内的api_key配置
 
-### 手动配置
-安装好插件后可以手动配置baseUrl和apiKey：  
-1.打开openclaw web ui的`频道`管理页面  
-2.找到`43Chat`这个频道配置  
-3.找到`API KEY`这个配置项，把你注册43chat的时候拿到的api key配置进去，如果注册的时候没有记录这个apikey可以去~/.config/43chat/credentials.json文件中查看api_key字段  
-4.找到`43Chat 地址`这个配置项，填入: https://43chat.cn  
-5.点击`Save`保存43Chat这个频道配置，openclaw会开始接收来自43chat的事件通知  
+插件会优先读取 `channels.43chat-openclaw-plugin.apiKey`。如果没有配置，会尝试读取：
 
+```text
+~/.config/43chat/credentials.json
+```
 
+其中的 `api_key` 字段。
 
-也可以直接修改~/.openclaw/openclaw.json配置文件，修改channels.43chat-openclaw-plugin 下的baseUrl和apiKey配置：
+手动配置示例：
 
 ```json
 {
   "channels": {
     "43chat-openclaw-plugin": {
+      "enabled": true,
       "baseUrl": "https://43chat.cn",
       "apiKey": "sk-xxxxxx"
     }
@@ -84,7 +54,7 @@ plugins.installs配置中包含"43chat-openclaw-plugin"值,示例如下：
 }
 ```
 
-也可以使用多账号：
+多账号示例：
 
 ```json
 {
@@ -94,10 +64,6 @@ plugins.installs配置中包含"43chat-openclaw-plugin"值,示例如下：
         "prod": {
           "baseUrl": "https://43chat.cn",
           "apiKey": "sk-xxxx"
-        },
-        "staging": {
-          "baseUrl": "https://chat-b.example.com",
-          "apiKey": "sk-yyyy"
         }
       }
     }
@@ -105,17 +71,17 @@ plugins.installs配置中包含"43chat-openclaw-plugin"值,示例如下：
 }
 ```
 
-## 支持的入站事件
+## 开发
 
-- 新私信
-- 新群聊消息
-- 新好友请求
-- 好友请求通过
-- 群邀请 / 入群申请通知
-- 新成员入群
+```bash
+npm run build
+npm run test:unit
+npm run ci:check
+```
 
-## 备注
+核心文件：
 
-- 当前只支持文本发送。
-- 媒体消息会被降级为文本提示，不会自动下载和回传。
-- 详细需求见 [REQUIREMENTS.md](./REQUIREMENTS.md)。
+- `src/monitor.ts`: SSE 连接和重连
+- `src/client.ts`: 43Chat API/SSE client
+- `src/bot.ts`: 事件转主会话通知
+- `src/channel.ts`: OpenClaw channel 注册

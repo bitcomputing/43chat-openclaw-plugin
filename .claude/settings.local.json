@@ -45,7 +45,13 @@
       "Bash(git commit -m ' *)",
       "Bash(openclaw --help)",
       "Bash(openclaw config *)",
-      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\('gateway',{}\\).get\\('nodes',{}\\), indent=2\\)\\)\")"
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\('gateway',{}\\).get\\('nodes',{}\\), indent=2\\)\\)\")",
+      "Bash(git commit *)",
+      "Bash(grep -v \"^.*//.*$\")",
+      "Bash(git tag *)",
+      "Bash(git push *)",
+      "WebFetch(domain:docs.openclaw.ai)",
+      "Bash(pnpm root *)"
     ]
   }
 }

@@ -44,7 +44,10 @@ export function resolve43ChatAccount({
   if (!chatCfg || !readOptionalNonBlankString(chatCfg.apiKey)) {
     // Try to read api_key from ~/.config/43chat/credentials.json
     try {
-      const credPath = join(homedir(), ".config", "43chat", "credentials.json");
+      const configBase = process.platform === "win32"
+        ? (process.env.APPDATA ?? join(homedir(), "AppData", "Roaming"))
+        : (process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"));
+      const credPath = join(configBase, "43chat", "credentials.json");
       const content = readFileSync(credPath, "utf-8");
       const parsed = JSON.parse(content);
       if (parsed && typeof parsed.api_key === "string" && parsed.api_key.trim()) {
@@ -82,13 +85,6 @@ export function resolve43ChatAccount({
         sseReconnectDelayMs: chatCfg.sseReconnectDelayMs,
         sseMaxReconnectDelayMs: chatCfg.sseMaxReconnectDelayMs,
         sseHeartbeatTimeoutMs: chatCfg.sseHeartbeatTimeoutMs,
-        promptGroupContextEnabled: chatCfg.promptGroupContextEnabled,
-        promptGroupContextApiPath: chatCfg.promptGroupContextApiPath,
-        promptGroupContextRefreshMs: chatCfg.promptGroupContextRefreshMs,
-        promptGroupContextMaxItems: chatCfg.promptGroupContextMaxItems,
-        textChunkLimit: chatCfg.textChunkLimit,
-        chunkMode: chatCfg.chunkMode ?? "raw",
-        blockStreaming: chatCfg.blockStreaming ?? false,
       },
     };
   }
@@ -107,18 +103,6 @@ export function resolve43ChatAccount({
       accountCfg?.sseMaxReconnectDelayMs ?? chatCfg?.sseMaxReconnectDelayMs,
     sseHeartbeatTimeoutMs:
       accountCfg?.sseHeartbeatTimeoutMs ?? chatCfg?.sseHeartbeatTimeoutMs,
-    promptGroupContextEnabled:
-      accountCfg?.promptGroupContextEnabled ?? chatCfg?.promptGroupContextEnabled,
-    promptGroupContextApiPath:
-      readOptionalNonBlankString(accountCfg?.promptGroupContextApiPath)
-      ?? readOptionalNonBlankString(chatCfg?.promptGroupContextApiPath),
-    promptGroupContextRefreshMs:
-      accountCfg?.promptGroupContextRefreshMs ?? chatCfg?.promptGroupContextRefreshMs,
-    promptGroupContextMaxItems:
-      accountCfg?.promptGroupContextMaxItems ?? chatCfg?.promptGroupContextMaxItems,
-    textChunkLimit: accountCfg?.textChunkLimit ?? chatCfg?.textChunkLimit,
-    chunkMode: accountCfg?.chunkMode ?? chatCfg?.chunkMode ?? "raw",
-    blockStreaming: accountCfg?.blockStreaming ?? chatCfg?.blockStreaming ?? false,
   };
 
   return {
