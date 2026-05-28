@@ -5,7 +5,6 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import type { Message } from "@mariozechner/pi-ai";
 import { resolve43ChatAccount } from "./accounts.js";
 import { get43ChatRuntime } from "./runtime.js";
 import { extract43ChatTextContent, truncateForLog } from "./message-content.js";
@@ -35,6 +34,7 @@ type InboundNotification = {
   timestamp: number;
   conversationLabel: string;
   isFromOwner: boolean;
+  isAgent?: boolean;
   groupSubject?: string;
 };
 
@@ -51,6 +51,30 @@ type AgentHarnessModule = {
     message?: unknown;
     messageId?: string;
   }) => void;
+};
+
+type TranscriptNotificationMessage = {
+  role: "assistant";
+  content: Array<{ type: "text"; text: string }>;
+  api: string;
+  provider: string;
+  model: string;
+  usage: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    totalTokens: number;
+    cost: {
+      input: number;
+      output: number;
+      cacheRead: number;
+      cacheWrite: number;
+      total: number;
+    };
+  };
+  stopReason: "stop";
+  timestamp: number;
 };
 
 const CHANNEL_ID = packageJson.openclaw.channel.id;
@@ -71,6 +95,12 @@ function rememberProcessedEvent(key: string): boolean {
     for (const [eventKey] of oldest) processedEvents.delete(eventKey);
   }
   return false;
+}
+
+function rememberOutboundMessage(messageId: string | undefined): void {
+  if (!messageId) return;
+  rememberProcessedEvent(`private_message:${messageId}`);
+  rememberProcessedEvent(`group_message:${messageId}`);
 }
 
 function resolvePnpmGlobalCandidates(harnessRelative: string): string[] {
@@ -139,6 +169,7 @@ function buildInboundNotification(event: Chat43AnySSEEvent): InboundNotification
         timestamp: data.timestamp || event.timestamp || Date.now(),
         conversationLabel: data.from_nickname || `user:${data.from_user_id}`,
         isFromOwner: data.is_from_owner === true,
+        isAgent: data.is_agent === true,
       };
     }
     case "group_message": {
@@ -155,6 +186,7 @@ function buildInboundNotification(event: Chat43AnySSEEvent): InboundNotification
         timestamp: data.timestamp || event.timestamp || Date.now(),
         conversationLabel: data.group_name || `group:${data.group_id}`,
         isFromOwner: data.is_from_owner === true,
+        isAgent: data.is_agent === true,
         groupSubject: data.group_name,
       };
     }
@@ -288,10 +320,12 @@ export function formatMainSessionNotificationEvent(params: {
     : undefined;
   const subjectBase = inbound.groupSubject || inbound.conversationLabel || inbound.target;
   const subject = groupId ? `${subjectBase} (群ID: ${groupId})` : subjectBase;
+  const agentLabel = inbound.isAgent === true ? "[来自 Agent]" : "";
+  const sender = `${inbound.senderName} (${inbound.senderId})${agentLabel}`;
   const preview = truncateForLog(inbound.text, 500) || "[非文本消息]";
   return inbound.chatType === "group"
-    ? `🔔来自43Chat的${chatLabel}消息 ${subject}\n${inbound.senderName} (${inbound.senderId}) : ${preview}`
-    : `🔔来自43Chat的${chatLabel}消息\n${inbound.senderName} (${inbound.senderId}) : ${preview}`;
+    ? `🔔来自43Chat的${chatLabel}消息 ${subject}\n${sender} : ${preview}`
+    : `🔔来自43Chat的${chatLabel}消息\n${sender} : ${preview}`;
 }
 
 async function appendMainSessionNotification(params: {
@@ -302,7 +336,7 @@ async function appendMainSessionNotification(params: {
 }): Promise<void> {
   await mkdir(path.dirname(params.sessionFile), { recursive: true });
   const harness = await loadAgentHarnessModule();
-  const message: Message = {
+  const message: TranscriptNotificationMessage = {
     role: "assistant",
     content: [{ type: "text", text: params.text }],
     api: "openai-responses",
@@ -376,8 +410,8 @@ async function setMainSessionName(params: {
   }
 }
 
-function shouldDispatchToAgent(inbound: InboundNotification): boolean {
-  return inbound.isFromOwner && inbound.chatType === "direct";
+export function shouldDispatchToAgent(inbound: InboundNotification): boolean {
+  return inbound.isFromOwner && !inbound.isAgent && inbound.chatType === "direct";
 }
 
 function shouldSkipOutboundReplyText(text: string): boolean {
@@ -416,12 +450,13 @@ async function dispatchOwnerPrivateReply(params: {
         if (!text || shouldSkipOutboundReplyText(text)) {
           return;
         }
-        await sendMessage43Chat({
+        const result = await sendMessage43Chat({
           cfg: params.cfg,
           to: params.inbound.target,
           text,
           accountId: params.routeAccountId,
         });
+        rememberOutboundMessage(result.messageId);
       },
       onError: (err, info) => {
         error(`43chat[${params.accountId}]: ${info.kind} reply failed: ${String(err)}`);

@@ -71,6 +71,7 @@ export type Chat43PrivateMessageEventData = {
   msg_type?: string;
   timestamp: number;
   is_from_owner?: boolean;
+  is_agent?: boolean;
 };
 
 export type Chat43GroupMessageEventData = {
@@ -90,6 +91,7 @@ export type Chat43GroupMessageEventData = {
   msg_type?: string;
   timestamp: number;
   is_from_owner?: boolean;
+  is_agent?: boolean;
 };
 
 export type Chat43FriendRequestEventData = {

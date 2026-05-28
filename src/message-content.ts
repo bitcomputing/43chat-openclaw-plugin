@@ -81,8 +81,9 @@ export function extract43ChatTextContent(rawContent: unknown, msgType?: string):
   }
 
   if (normalizedType === "file") {
+    const name = readStringField(parsed, "name");
     const url = readStringField(parsed, "url");
-    return url ? `[文件] ${url}` : "[文件]";
+    return [name ? `[文件] ${name}` : "[文件]", url].filter(Boolean).join(" ");
   }
 
   if (normalizedType === "sharegroup") {

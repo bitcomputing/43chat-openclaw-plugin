@@ -27,6 +27,15 @@ describe("43Chat message content extraction", () => {
     ).toBe("[文件] https://img.duiniu.cn/files/document.pdf");
   });
 
+  it("formats file content with the file name when present", () => {
+    expect(
+      extract43ChatTextContent(
+        "{\"name\":\"需求文档.pdf\",\"url\":\"https://img.duiniu.cn/files/document.pdf\"}",
+        "file",
+      ),
+    ).toBe("[文件] 需求文档.pdf https://img.duiniu.cn/files/document.pdf");
+  });
+
   it("formats shared group content from the JSON payload", () => {
     expect(
       extract43ChatTextContent(
