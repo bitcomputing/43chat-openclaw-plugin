@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SSEFrameParser } from "../client.js";
+import { create43ChatClient, SSEFrameParser } from "../client.js";
 
 describe("SSEFrameParser", () => {
   it("parses comment heartbeats and JSON data frames", () => {
@@ -27,5 +27,20 @@ describe("SSEFrameParser", () => {
         data: "{\"a\":1,\n\"b\":2}",
       },
     ]);
+  });
+
+  it("rejects non-ASCII api keys before opening SSE", async () => {
+    const client = create43ChatClient({
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      baseUrl: "https://43chat.cn",
+      apiKey: "abc…123",
+      config: {},
+    } as never);
+
+    await expect(client.connectSSE({
+      onEvent: async () => {},
+    })).rejects.toThrow("non-ASCII characters");
   });
 });

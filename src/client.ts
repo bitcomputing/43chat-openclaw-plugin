@@ -148,9 +148,21 @@ function withTimeout(signal: AbortSignal | undefined, timeoutMs: number): {
   };
 }
 
+function validateAsciiHeaderValue(value: string, headerName: string): void {
+  for (const ch of value) {
+    if (ch.codePointAt(0) && ch.codePointAt(0)! > 0x7f) {
+      throw new Chat43ApiError({
+        message: `43Chat ${headerName} contains non-ASCII characters; re-enter the full token, not a redacted value`,
+        retryable: false,
+      });
+    }
+  }
+}
+
 function createAuthHeaders(apiKey: string | undefined, extra?: any): Headers {
   const headers = new Headers(extra);
   if (apiKey) {
+    validateAsciiHeaderValue(apiKey, "apiKey");
     headers.set("Authorization", `Bearer ${apiKey}`);
   }
   return headers;
